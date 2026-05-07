@@ -149,7 +149,29 @@ if st.session_state["role"] == "crew":
     c1.title("👷 Dashboard Ekipy")
     if c2.button("Wyloguj"): logout()
     
-    st.success("Cześć Karol! Mostek 2 rośnie w siłę dzięki Twojej ekipie. Dobrej roboty! 💪")
+    from motywacja import get_daily_message, get_bonus_meme
+    import random
+    
+    # Calculate day number based on earliest room
+    try:
+        df_rooms_for_date = supabase.table("rooms").select("created_at").order("created_at").limit(1).execute()
+        if df_rooms_for_date.data:
+            start_date = pd.to_datetime(df_rooms_for_date.data[0]['created_at']).date()
+        else:
+            start_date = date.today()
+    except Exception:
+        start_date = date.today()
+        
+    day_number = (date.today() - start_date).days + 1
+    if day_number < 1: day_number = 1
+    
+    msg = get_daily_message(day_number)
+    
+    st.info(f"📅 **DZIEŃ {day_number} / 30**")
+    st.success(msg)
+    
+    if random.random() > 0.7:  # 30% chance to show a bonus meme
+        st.warning(get_bonus_meme())
     
     # RAPORT DNIA EKIPY (Wrzucany do Dziennika Inwestora)
     with st.expander("📝 Dodaj Raport z prac (Dziennik)", expanded=True):
