@@ -63,6 +63,36 @@ def get_project_days_info(project_meta):
         "is_started": today >= start, "is_ended": today >= end
     }
 
+def get_tasks_with_dependencies():
+    try:
+        response = supabase.table("tasks_with_dependencies").select("*").order("planned_start_date").execute()
+        return response.data or []
+    except Exception:
+        return []
+
+def complete_task(task_id):
+    supabase.table("tasks").update({"status": "Done", "progress_percent": 100, "actual_end_date": datetime.now().isoformat()}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def add_investor_note(task_id, note):
+    supabase.table("tasks").update({"investor_note": note}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def can_task_start(task_id):
+    try:
+        task = supabase.table("tasks_with_dependencies").select("*").eq("id", task_id).execute()
+        if not task.data: return {"can_start": False, "reason": "Zadanie nie znalezione"}
+        
+        task_data = task.data[0]
+        if task_data.get("all_dependencies_met", False):
+            return {"can_start": True, "message": "✅ Wszystkie zależności spełnione"}
+        else:
+            blocking = supabase.table("tasks").select("id, name, status").contains("depends_on_task_ids", [task_id]).execute()
+            blocking_names = [t['name'] for t in (blocking.data or []) if t['status'] != 'Done']
+            return {"can_start": False, "reason": f"Czeka na: {', '.join(blocking_names) if blocking_names else 'Inne zadania'}", "blocking_tasks": blocking_names}
+    except Exception as e:
+        return {"can_start": False, "reason": str(e)}
+
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -402,6 +432,32 @@ elif menu == "1. Dashboard (Centrum)":
                     c3.markdown(f"⚠️ {row['Powód']}")
 
     st.divider()
+    
+    st.subheader("📋 Status zadań Karola")
+    tasks = get_tasks_with_dependencies()
+    if tasks:
+        c1, c2, c3, c4 = st.columns(4)
+        backlog = len([t for t in tasks if t['status'] == 'Backlog'])
+        in_progress = len([t for t in tasks if t['status'] == 'In Progress'])
+        blocked = len([t for t in tasks if not t.get('all_dependencies_met', True)])
+        done = len([t for t in tasks if t['status'] == 'Done'])
+        c1.metric("📦 Backlog", backlog)
+        c2.metric("🟧 W trakcie", in_progress)
+        c3.metric("❌ Zablokowane", blocked)
+        c4.metric("✅ Ukończone", done)
+        
+        st.write("**🚨 Przegląd zablokowanych zadań:**")
+        blocked_tasks = [t for t in tasks if not t.get('all_dependencies_met', True)]
+        if blocked_tasks:
+            for task in blocked_tasks[:3]:
+                can_start_result = can_task_start(task['id'])
+                st.warning(f"⛔ **{task['name']}** — {can_start_result['reason']}")
+        else:
+            st.success("✅ Żadne zadania nie są zablokowane!")
+    else:
+        st.info("Czekamy na plan Karola...")
+
+    st.divider()
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("🛠️ Zgłoszenia od ekipy")
@@ -539,14 +595,45 @@ elif menu == "6. Wydatki (Finanse)":
     else: st.info("Brak wydatków.")
 
 elif menu == "4. Zadania":
-    st.title("📋 Lista Zadań")
-    df_tasks = read_table("tasks", select="id, name, status, priority, progress, assignee")
-    if not df_tasks.empty:
-        edited_tasks = st.data_editor(df_tasks, disabled=["id", "name"], hide_index=True, use_container_width=True)
-        if st.button("💾 Zapisz"):
-            for _, row in edited_tasks.iterrows():
-                supabase.table("tasks").update({"status": row['status'], "priority": row['priority'], "progress": row['progress'], "assignee": row['assignee']}).eq("id", row['id']).execute()
-            st.rerun()
+    st.title("📋 PLAN KAROLA — Twoje Zadania")
+    st.caption("Karol zaplanował pracę. Twoja rola: usunąć blokady i dodać uwagi.")
+    tasks = get_tasks_with_dependencies()
+
+    if not tasks:
+        st.info("📭 Karol jeszcze nie zaplanował żadnych zadań")
+    else:
+        for task in tasks:
+            task_id = task['id']
+            with st.container(border=True):
+                col1, col2, col3 = st.columns([2, 1, 1])
+                with col1:
+                    st.markdown(f"### {task['name']}")
+                with col2:
+                    st.write(f"**{task['status']}**")
+                with col3:
+                    st.metric("Postęp", f"{task.get('progress_percent', 0)}%")
+                
+                c1, c2 = st.columns(2)
+                c1.write(f"**Zespół:** {task.get('assigned_to', '—')}")
+                c1.write(f"**Okres:** {task['planned_start_date']} - {task['planned_end_date']}")
+                if task.get('description'): c2.write(f"**Instrukcja:** {task['description']}")
+                
+                if not task.get('all_dependencies_met', True):
+                    st.error(f"⛔ Zablokowane. Zależy od innych zadań.")
+                
+                st.write("**🟨 Twoja notatka (widoczna dla Karola):**")
+                current_note = task.get('investor_note') or ""
+                new_note = st.text_area("Dodaj notatkę", value=current_note, key=f"note_{task_id}", label_visibility="collapsed")
+                
+                if st.button("💾 Zapisz notatkę", key=f"save_note_{task_id}"):
+                    add_investor_note(task_id, new_note)
+                    st.success("Zapisano notatkę!")
+                    st.rerun()
+                
+                if task['status'] != 'Done' and st.button("✅ Oznacz jako UKOŃCZONE", key=f"complete_{task_id}"):
+                    complete_task(task_id)
+                    st.success("Zadanie ukończone!")
+                    st.rerun()
 
 elif menu == "5. Ekipa":
     st.title("👷 Zapotrzebowania Ekipy")
