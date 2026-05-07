@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from supabase import create_client, Client
+import plotly.graph_objects as go
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -28,6 +29,40 @@ def read_table(table_name, select="*", filters=None, order_by=None):
         query = query.order(order_by[0], desc=order_by[1])
     res = query.execute()
     return pd.DataFrame(res.data)
+
+def get_project_metadata():
+    res = supabase.table("project_metadata").select("*").order("created_at", desc=True).limit(1).execute()
+    return res.data[0] if res.data else None
+
+def create_project_metadata(**kwargs):
+    kwargs['created_by'] = "investor_user"
+    if 'planned_start_date' in kwargs and isinstance(kwargs['planned_start_date'], date):
+        kwargs['planned_start_date'] = kwargs['planned_start_date'].isoformat()
+    if 'planned_end_date' in kwargs and isinstance(kwargs['planned_end_date'], date):
+        kwargs['planned_end_date'] = kwargs['planned_end_date'].isoformat()
+    supabase.table("project_metadata").insert(kwargs).execute()
+
+def update_project_metadata(project_id, **kwargs):
+    if 'actual_start_date' in kwargs and isinstance(kwargs['actual_start_date'], date):
+        kwargs['actual_start_date'] = kwargs['actual_start_date'].isoformat()
+    if 'actual_end_date' in kwargs and isinstance(kwargs['actual_end_date'], date):
+        kwargs['actual_end_date'] = kwargs['actual_end_date'].isoformat()
+    supabase.table("project_metadata").update(kwargs).eq("id", project_id).execute()
+
+def get_project_days_info(project_meta):
+    start = datetime.strptime(project_meta['planned_start_date'], "%Y-%m-%d").date()
+    end = datetime.strptime(project_meta['planned_end_date'], "%Y-%m-%d").date()
+    today = date.today()
+    total_days = (end - start).days
+    elapsed_days = (today - start).days
+    remaining_days = (end - today).days
+    progress_pct = max(0, min(100, int((elapsed_days / total_days) * 100) if total_days > 0 else 0))
+    return {
+        "total_days": total_days, "elapsed_days": elapsed_days, 
+        "remaining_days": remaining_days, "progress_pct": progress_pct,
+        "is_started": today >= start, "is_ended": today >= end
+    }
+
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -220,7 +255,15 @@ st.sidebar.markdown("### 👤 Zalogowano jako: Inwestor")
 if st.sidebar.button("Wyloguj"): logout()
 st.sidebar.divider()
 
+project_meta = get_project_metadata()
+if project_meta:
+    st.sidebar.markdown(f"### 🏗️ {project_meta['project_name']}")
+    st.sidebar.caption(f"Status: {project_meta['status']}")
+else:
+    st.sidebar.warning("⚠️ Charter nie utworzony")
+
 menu = st.sidebar.radio("Nawigacja", [
+    "0. Charter Projektu",
     "1. Dashboard (Centrum)", 
     "2. Start remontu", 
     "3. Materiały i sprzęty", 
@@ -239,20 +282,124 @@ rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
 for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
-if menu == "1. Dashboard (Centrum)":
+if menu == "0. Charter Projektu":
+    st.title("🏗️ CHARTER PROJEKTU")
+    st.caption("Główna oś czasu i parametry projektu")
+
+    if not project_meta:
+        st.warning("⚠️ Charter nie został jeszcze utworzony")
+        with st.form("charter_creation_form", clear_on_submit=False):
+            st.subheader("📋 Podstawowe informacje")
+            col1, col2 = st.columns(2)
+            project_name = col1.text_input("Nazwa projektu *")
+            investor_name = col2.text_input("Twoje imię (Inwestor) *")
+            project_desc = st.text_area("Opis projektu (opcjonalnie)")
+            
+            st.subheader("📅 Harmonogram projektu")
+            col1, col2, col3 = st.columns(3)
+            start_date = col1.date_input("Data startu projektu *", value=date.today() + timedelta(days=7))
+            end_date = col2.date_input("Data zakończenia projektu *", value=date.today() + timedelta(days=52))
+            
+            st.subheader("💰 Budżet")
+            total_budget = st.number_input("Całkowity budżet projektu (zł) *", min_value=10000, step=10000, value=100000)
+            
+            st.subheader("👥 Zespół projektu")
+            col1, col2 = st.columns(2)
+            crew_lead_name = col1.text_input("Imię szefa ekipy")
+            crew_contact = col2.text_input("Telefon do szefa ekipy")
+            
+            st.subheader("📝 Zakres prac")
+            scope = st.text_area("Co będzie remontem obejmować? *", height=100)
+            
+            st.subheader("⚡ Warunki specjalne")
+            conditions = st.text_area("Warunki specjalne (opcjonalnie)", height=80)
+            
+            if st.form_submit_button("🚀 UTWÓRZ CHARTER PROJEKTU", use_container_width=True, type="primary"):
+                if not project_name or not investor_name or not scope or not start_date or not end_date:
+                    st.error("❌ Uzupełnij pola oznaczone *")
+                elif end_date <= start_date:
+                    st.error("❌ Data zakończenia musi być PO dacie startu")
+                else:
+                    create_project_metadata(
+                        project_name=project_name, project_description=project_desc,
+                        planned_start_date=start_date, planned_end_date=end_date,
+                        total_budget=total_budget, investor_name=investor_name,
+                        crew_lead_name=crew_lead_name or "Nie wiadomo", crew_contact=crew_contact or "Brak",
+                        scope_of_work=scope, special_conditions=conditions, status="PLANNING"
+                    )
+                    st.success("✅ Charter utworzony!")
+                    st.rerun()
+    else:
+        st.subheader(f"📌 {project_meta['project_name']}")
+        col1, col2, col3, col4 = st.columns(4)
+        start_str = project_meta['planned_start_date']
+        end_str = project_meta['planned_end_date']
+        start_date_obj = datetime.strptime(start_str, "%Y-%m-%d").date()
+        end_date_obj = datetime.strptime(end_str, "%Y-%m-%d").date()
+        total_days = (end_date_obj - start_date_obj).days
+        
+        col1.metric("📅 Start", start_date_obj.strftime("%d.%m.%Y"))
+        col2.metric("📅 Koniec", end_date_obj.strftime("%d.%m.%Y"))
+        col3.metric("⏱️ Czas całkowity", f"{total_days} dni")
+        col4.metric("💰 Budżet", f"{project_meta['total_budget']:,.0f} zł")
+        
+        st.divider()
+        st.subheader("📊 Oś czasu projektu")
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=['Projekt'], x=[total_days], orientation='h',
+            marker=dict(color='#00D9FF', line=dict(color='#006FA5', width=2)),
+            text=f"{total_days} dni", textposition='inside',
+            hovertemplate=f"<b>Projekt</b><br>Start: {start_date_obj.strftime('%d.%m.%Y')}<br>Koniec: {end_date_obj.strftime('%d.%m.%Y')}<extra></extra>"
+        ))
+        fig.update_xaxes(title_text="Dni")
+        fig.update_yaxes(showticklabels=False)
+        fig.update_layout(height=150, showlegend=False, margin=dict(l=20, r=20, t=20, b=20))
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.divider()
+        st.subheader("📍 Status i kontrola")
+        days_info = get_project_days_info(project_meta)
+        
+        if project_meta['status'] == "PLANNING":
+            st.warning("🟡 **Status: PLANOWANIE**")
+            st.info("✅ **Checklist przed aktywacją:**\n- [ ] Materiały zamówione\n- [ ] Ekipa potwierdzona\n- [ ] Decyzje podjęte")
+            if st.button("🚀 URUCHOM PROJEKT", use_container_width=True, type="primary"):
+                update_project_metadata(project_meta['id'], status="ACTIVE", actual_start_date=date.today())
+                st.rerun()
+        elif project_meta['status'] == "ACTIVE":
+            st.success("🟢 **Status: W TRAKCIE**")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("⏳ Dni upłynęło", days_info['elapsed_days'])
+            c2.metric("📅 Dni zostało", max(0, days_info['remaining_days']))
+            c3.metric("📊 Postęp", f"{days_info['progress_pct']}%")
+            if days_info['remaining_days'] < 7: c4.error(f"🚨 {days_info['remaining_days']} dni!")
+            else: c4.info("✅ OK")
+            st.progress(days_info['progress_pct'] / 100, text=f"Realizacja: {days_info['progress_pct']}%")
+            if st.button("✅ Zakończ projekt", use_container_width=True, type="primary"):
+                update_project_metadata(project_meta['id'], status="COMPLETED", actual_end_date=date.today())
+                st.rerun()
+        elif project_meta['status'] == "COMPLETED":
+            st.success("✅ **Status: UKOŃCZONY**")
+
+elif menu == "1. Dashboard (Centrum)":
     st.title("📌 Remont IQ Cloud - Dzisiaj")
     st.subheader("🏠 Inwestycja Mostek 2")
     st.markdown("---")
-    st.subheader("🔥 Najważniejsze teraz (Top 5)")
-    recs = calculate_smart_recommendations()
-    if recs.empty: st.success("Brak pożarów! Wygląda na to, że masz wszystko pod kontrolą.")
+    if not project_meta or project_meta['status'] != "ACTIVE":
+        st.warning("⚠️ Projekt wciąż w fazie PLANOWANIA. Po aktywacji (w Module 0) zobaczysz tutaj analizę i ostrzeżenia.")
     else:
-        for idx, row in recs.iterrows():
-            with st.container(border=True):
-                c1, c2, c3 = st.columns([1, 4, 3])
-                c1.markdown(f"**{row['Typ']}**")
-                c2.markdown(f"**{row['Zadanie']}**")
-                c3.markdown(f"⚠️ {row['Powód']}")
+        st.subheader("🔥 Najważniejsze teraz (Top 5)")
+        recs = calculate_smart_recommendations()
+        if recs.empty: st.success("Brak pożarów! Wygląda na to, że masz wszystko pod kontrolą.")
+        else:
+            for idx, row in recs.iterrows():
+                with st.container(border=True):
+                    c1, c2, c3 = st.columns([1, 4, 3])
+                    c1.markdown(f"**{row['Typ']}**")
+                    c2.markdown(f"**{row['Zadanie']}**")
+                    c3.markdown(f"⚠️ {row['Powód']}")
 
     st.divider()
     col1, col2 = st.columns(2)
