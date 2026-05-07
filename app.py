@@ -149,7 +149,7 @@ if st.session_state["role"] == "crew":
     c1.title("👷 Dashboard Ekipy")
     if c2.button("Wyloguj"): logout()
     
-    st.success("Witaj! Widzisz tylko to, co dotyczy pracy na budowie.")
+    st.success("Cześć Karol! Mostek 2 rośnie w siłę dzięki Twojej ekipie. Dobrej roboty! 💪")
     
     # RAPORT DNIA EKIPY (Wrzucany do Dziennika Inwestora)
     with st.expander("📝 Dodaj Raport z prac (Dziennik)", expanded=True):
