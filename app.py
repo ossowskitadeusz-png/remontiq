@@ -660,63 +660,182 @@ if menu == "0. Charter Projektu":
             st.success("✅ **Status: UKOŃCZONY**")
 
 elif menu == "1. Dashboard (Centrum)":
-    st.title("📌 Remont IQ Cloud - Dzisiaj")
-    st.subheader("🏠 Inwestycja Mostek 2")
-    st.markdown("---")
-    if not project_meta or project_meta['status'] != "ACTIVE":
-        st.warning("⚠️ Projekt wciąż w fazie PLANOWANIA. Po aktywacji (w Module 0) zobaczysz tutaj analizę i ostrzeżenia.")
-    else:
-        st.subheader("🔥 Najważniejsze teraz (Top 5)")
-        recs = calculate_smart_recommendations()
-        if recs.empty: st.success("Brak pożarów! Wygląda na to, że masz wszystko pod kontrolą.")
-        else:
-            for idx, row in recs.iterrows():
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns([1, 4, 3])
-                    c1.markdown(f"**{row['Typ']}**")
-                    c2.markdown(f"**{row['Zadanie']}**")
-                    c3.markdown(f"⚠️ {row['Powód']}")
+    st.title("🎮 COMMAND CENTER")
+    st.caption(f"Centrum kontroli projektu — {date.today().strftime('%d.%m.%Y')}")
+
+    # ==============================
+    # DANE
+    # ==============================
+    all_tasks_data = supabase.table("tasks").select("*").execute().data or []
+    pending_insp = get_pending_inspections()
+    crew_grouped = get_crew_requests_grouped()
+    new_requests = crew_grouped.get("Nowe", [])
+    blocked_tasks = [t for t in all_tasks_data if t.get("is_blocked")]
+    awaiting_insp = [t for t in all_tasks_data if t.get("kanban_status") == "AWAITING_INSPECTION"]
+
+    try:
+        decisions_data = supabase.table("decisions").select("*").eq("status", "Do podjęcia").execute().data or []
+        urgent_decisions = [d for d in decisions_data if d.get("due_date") and (date.fromisoformat(d["due_date"]) - date.today()).days <= 7]
+    except Exception:
+        urgent_decisions = []
+
+    try:
+        risks_data = supabase.table("issues").select("*").not_.in_("status", ["Rozwiązane", "Zignorowane"]).execute().data or []
+        critical_risks = [r for r in risks_data if r.get("severity") == "Krytyczne"]
+    except Exception:
+        risks_data, critical_risks = [], []
+
+    # ==============================
+    # SEKCJA 1: ALARMY
+    # ==============================
+    st.markdown("## ⚡ WYMAGAJĄ TWOJEGO DZIAŁANIA")
+
+    def alarm_color(n): return "#e53e3e" if n > 0 else "#38a169"
+    def alarm_bg(n): return "rgba(229,62,62,0.08)" if n > 0 else "rgba(56,161,105,0.08)"
+
+    c1, c2, c3, c4 = st.columns(4)
+    for col, label, emoji, count, sub in [
+        (c1, "Do Odbioru", "🔔", len(pending_insp), ""),
+        (c2, "Blokery", "🔴", len(blocked_tasks), ""),
+        (c3, "Decyzje", "🤔", len(urgent_decisions), "deadline ≤7 dni"),
+        (c4, "Ryzyka", "⚠️", len(risks_data), f"{len(critical_risks)} kryt."),
+    ]:
+        col.markdown(f"""
+        <div style="background:{alarm_bg(count)};border:2px solid {alarm_color(count)};border-radius:10px;padding:16px;text-align:center;">
+            <div style="font-size:28px">{emoji}</div>
+            <div style="font-size:13px;color:#888">{label}</div>
+            <div style="font-size:36px;font-weight:bold;color:{alarm_color(count)}">{count}</div>
+            <div style="font-size:11px;color:#aaa">{sub}</div>
+        </div>""", unsafe_allow_html=True)
 
     st.divider()
-    
-    st.subheader("📋 Status zadań Karola")
-    tasks = get_tasks_with_dependencies()
-    if tasks:
-        c1, c2, c3, c4 = st.columns(4)
-        backlog = len([t for t in tasks if t['status'] == 'Backlog'])
-        in_progress = len([t for t in tasks if t['status'] == 'In Progress'])
-        blocked = len([t for t in tasks if not t.get('all_dependencies_met', True)])
-        done = len([t for t in tasks if t['status'] == 'Done'])
-        c1.metric("📦 Backlog", backlog)
-        c2.metric("🟧 W trakcie", in_progress)
-        c3.metric("❌ Zablokowane", blocked)
-        c4.metric("✅ Ukończone", done)
-        
-        st.write("**🚨 Przegląd zablokowanych zadań:**")
-        blocked_tasks = [t for t in tasks if not t.get('all_dependencies_met', True)]
-        if blocked_tasks:
-            for task in blocked_tasks[:3]:
-                can_start_result = can_task_start(task['id'])
-                st.warning(f"⛔ **{task['name']}** — {can_start_result['reason']}")
-        else:
-            st.success("✅ Żadne zadania nie są zablokowane!")
+
+    # ==============================
+    # SEKCJA 2: PULS PROJEKTU
+    # ==============================
+    st.markdown("## 📊 PULS PROJEKTU")
+
+    if project_meta:
+        total_t = len(all_tasks_data)
+        done_t = len([t for t in all_tasks_data if t.get("kanban_status") == "COMPLETED"])
+        prog_pct = int(done_t / total_t * 100) if total_t > 0 else 0
+        prog_emoji = "🟢" if prog_pct >= 70 else ("🟡" if prog_pct >= 30 else "🔴")
+
+        try:
+            total_budget = float(project_meta.get("total_budget", 0))
+            exp_resp = supabase.table("expenses").select("amount").execute()
+            spent = sum(float(e.get("amount", 0)) for e in (exp_resp.data or []))
+            budget_pct = int(spent / total_budget * 100) if total_budget > 0 else 0
+            budget_emoji = "🟢" if budget_pct < 70 else ("🟡" if budget_pct < 90 else "🔴")
+        except Exception:
+            spent, total_budget, budget_pct, budget_emoji = 0, 0, 0, "🟢"
+
+        blocker_emoji = "🔴" if blocked_tasks else "🟢"
+        risk_emoji = "🔴" if critical_risks else ("🟡" if risks_data else "🟢")
+
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric(f"{prog_emoji} Postęp zadań", f"{prog_pct}%", f"{done_t}/{total_t} zad.")
+        p2.metric(f"{budget_emoji} Budżet", f"{budget_pct}%", f"{spent:,.0f} / {total_budget:,.0f} zł")
+        p3.metric(f"{blocker_emoji} Blokery", len(blocked_tasks), "zadań zatrzymanych")
+        p4.metric(f"{risk_emoji} Ryzyka", len(risks_data), f"{len(critical_risks)} krytycznych")
     else:
-        st.info("Czekamy na plan Karola...")
+        st.info("Utwórz Charter projektu (menu 0) aby widzieć puls.")
 
     st.divider()
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("🛠️ Zgłoszenia od ekipy")
-        reqs = read_table("crew_requests", filters={"status": "Do zrobienia"})
-        if reqs.empty: st.success("Ekipa ma wszystko, czego potrzebuje.")
-        else: st.dataframe(reqs[['title', 'needed_by']], hide_index=True)
-    with col2:
-        st.subheader("📦 Materiały na budowie")
-        mats_ok = read_table("materials", filters={"available_for_crew": True})
-        st.markdown("**✅ Na miejscu (Dostępne):**")
-        if mats_ok.empty: st.caption("Brak materiałów")
-        else: 
-            for _, m in mats_ok.iterrows(): st.caption(f"- {m['name']}")
+
+    # ==============================
+    # SEKCJA 3: DO ODBIORU (inline)
+    # ==============================
+    if pending_insp:
+        st.markdown(f"## 🔔 DO ODBIORU ({len(pending_insp)})")
+        for insp in pending_insp:
+            task_r = supabase.table("tasks").select("name,assigned_to").eq("id", insp["task_id"]).execute()
+            task_info = task_r.data[0] if task_r.data else {}
+            with st.container(border=True):
+                h1, h2 = st.columns([4, 1])
+                h1.markdown(f"### 🔔 {task_info.get('name', '?')}")
+                h1.caption(f"Zgłoszono: {str(insp.get('submitted_at',''))[:10]} | Zespół: {task_info.get('assigned_to','—')}")
+                h2.warning("⏳ Czeka")
+                if insp.get("submission_notes"):
+                    st.info(f"📝 Karol: {insp['submission_notes']}")
+                ba, bb = st.columns(2)
+                if ba.button("✅ ZATWIERDŹ", key=f"cc_appr_{insp['id']}", use_container_width=True, type="primary"):
+                    approve_inspection(insp["id"])
+                    st.success("✅ Zatwierdzone! Karol widzi to na tablicy.")
+                    st.rerun()
+                if bb.button("❌ WYMAGA POPRAWEK", key=f"cc_rwrk_{insp['id']}", use_container_width=True):
+                    st.session_state[f"rework_{insp['id']}"] = True
+                if st.session_state.get(f"rework_{insp['id']}"):
+                    rw = st.text_area("Opisz co poprawić", key=f"rw_txt_{insp['id']}")
+                    if st.button("Wyślij poprawki", key=f"rw_send_{insp['id']}"):
+                        request_rework(insp["id"], rw)
+                        st.session_state.pop(f"rework_{insp['id']}", None)
+                        st.rerun()
+        st.divider()
+
+    # ==============================
+    # SEKCJA 4: BLOKERY PRACY (inline)
+    # ==============================
+    if blocked_tasks:
+        st.markdown(f"## 🔴 BLOKERY PRACY — Co masz zrobić? ({len(blocked_tasks)})")
+        for task in blocked_tasks:
+            with st.container(border=True):
+                bh1, bh2 = st.columns([4, 1])
+                bh1.markdown(f"### {task['name']}")
+                bh1.caption(f"Powód blokady: {task.get('blocker_reason', '—')}")
+                bh2.error("🔴 BLOKADA")
+                # zgłoszenia powiązane z tym zadaniem
+                linked_reqs = [r for r in (crew_grouped.get("Nowe", []) + crew_grouped.get("Potwierdzone", [])) if r.get("linked_task_id") == task["id"]]
+                for req in linked_reqs:
+                    st.write(f"📦 **{req['title']}** — status: {req['status']}")
+                    if req.get("investor_note"): st.caption(f"Twoja notatka: {req['investor_note']}")
+                    if req["status"] == "Potwierdzone":
+                        if st.button(f"📦 DOSTARCZONE — {req['title']}", key=f"cc_del_{req['id']}", type="primary"):
+                            mark_crew_request_delivered(req["id"])
+                            st.rerun()
+        st.divider()
+
+    # ==============================
+    # SEKCJA 5: ZGŁOSZENIA EKIPY (inline)
+    # ==============================
+    if new_requests:
+        st.markdown(f"## 🛠️ NOWE ZGŁOSZENIA EKIPY ({len(new_requests)})")
+        for req in new_requests:
+            with st.container(border=True):
+                rh1, rh2 = st.columns([4, 1])
+                label = "🚨 PILNE — " if req.get("is_blocker") else ""
+                rh1.markdown(f"**{label}{req['title']}**")
+                rh1.caption(f"Potrzebne do: {req.get('needed_by','—')}")
+                rh2.error("🔴 NOWE")
+                with st.form(f"cc_req_form_{req['id']}", clear_on_submit=True):
+                    fn1, fn2 = st.columns([3, 1])
+                    note_val = fn1.text_input("Twoja notatka", placeholder="np. Zamówiłem, dostawa w czwartek", key=f"cc_note_{req['id']}")
+                    del_date = fn2.date_input("Dostawa", key=f"cc_ddate_{req['id']}")
+                    fa, fb = st.columns(2)
+                    if fa.form_submit_button("✅ POTWIERDŹ", use_container_width=True, type="primary"):
+                        confirm_crew_request(req["id"], note_val, del_date)
+                        st.rerun()
+                    if fb.form_submit_button("❌ ANULUJ", use_container_width=True):
+                        cancel_crew_request(req["id"])
+                        st.rerun()
+        st.divider()
+
+    # ==============================
+    # SEKCJA 6: PLAN KAROLA (mini)
+    # ==============================
+    st.markdown("## 📅 PLAN KAROLA — TOP 5 ZADAŃ")
+    top_tasks = supabase.table("tasks").select("name,kanban_status,planned_start_date,planned_end_date,is_blocked").order("planned_start_date").limit(5).execute().data or []
+    if top_tasks:
+        STATUS_EMOJI = {"BACKLOG": "⬜", "READY": "🟦", "IN_PROGRESS": "🟧", "AWAITING_INSPECTION": "🔔", "COMPLETED": "🟩"}
+        for t in top_tasks:
+            blk = " 🔴 ZABLOKOWANE" if t.get("is_blocked") else ""
+            em = STATUS_EMOJI.get(t.get("kanban_status", "BACKLOG"), "❓")
+            st.write(f"{em} **{t['name']}**{blk}")
+            st.caption(f"   {t.get('planned_start_date','?')} → {t.get('planned_end_date','?')}")
+    else:
+        st.info("Karol jeszcze nie zaplanował zadań.")
+
+
 
 elif menu == "2. Start remontu":
     st.title("🚀 Kreator Startowy (Cloud)")
