@@ -120,7 +120,7 @@ def logout():
 
 # --- EKRAN LOGOWANIA ---
 if st.session_state["role"] is None:
-    st.markdown("<h1 style='text-align: center;'>Witamy w RemontIQ</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>Witamy w Remont IQ</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center;'>Podaj PIN dostępu do aplikacji.</p>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -218,7 +218,9 @@ for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
 if menu == "1. Dashboard (Centrum)":
-    st.title("📌 RemontIQ Cloud - Dzisiaj")
+    st.title("📌 Remont IQ Cloud - Dzisiaj")
+    st.subheader("🏠 Inwestycja Mostek 2")
+    st.markdown("---")
     st.subheader("🔥 Najważniejsze teraz (Top 5)")
     recs = calculate_smart_recommendations()
     if recs.empty: st.success("Brak pożarów! Wygląda na to, że masz wszystko pod kontrolą.")
