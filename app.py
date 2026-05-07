@@ -194,6 +194,61 @@ def get_crew_kpis():
     except:
         return {"total_tasks": 0, "in_progress": 0, "blocked": 0, "completed": 0, "awaiting_inspection": 0, "days_to_end": 0, "completion_rate": 0}
 
+def get_crew_requests_grouped():
+    """Zwróć zgłoszenia ekipy pogrupowane po statusie."""
+    try:
+        response = supabase.table("crew_requests").select("*").order("created_at", desc=True).execute()
+        requests = response.data or []
+        grouped = {"Nowe": [], "Potwierdzone": [], "Dostarczone": [], "Anulowane": []}
+        for req in requests:
+            s = req.get("status", "Nowe")
+            if s not in grouped:
+                s = "Nowe"
+            grouped[s].append(req)
+        return grouped
+    except Exception:
+        return {"Nowe": [], "Potwierdzone": [], "Dostarczone": [], "Anulowane": []}
+
+def confirm_crew_request(request_id, investor_note="", expected_delivery_date=None):
+    """Inwestor potwierdza: 'Wiem, zajmuję się tym'."""
+    payload = {
+        "status": "Potwierdzone",
+        "investor_note": investor_note,
+        "confirmed_at": datetime.now().isoformat(),
+    }
+    if expected_delivery_date:
+        payload["expected_delivery_date"] = expected_delivery_date.isoformat() if hasattr(expected_delivery_date, 'isoformat') else str(expected_delivery_date)
+    supabase.table("crew_requests").update(payload).eq("id", request_id).execute()
+    return {"status": "ok"}
+
+def mark_crew_request_delivered(request_id):
+    """Inwestor potwierdza dostawę: 'Materiał jest na budowie'."""
+    supabase.table("crew_requests").update({
+        "status": "Dostarczone",
+        "delivered_at": datetime.now().isoformat()
+    }).eq("id", request_id).execute()
+    return {"status": "ok"}
+
+def cancel_crew_request(request_id):
+    """Inwestor anuluje zgłoszenie — odblokuj powiązane zadanie."""
+    req_data = supabase.table("crew_requests").select("linked_task_id").eq("id", request_id).execute()
+    supabase.table("crew_requests").update({"status": "Anulowane"}).eq("id", request_id).execute()
+    if req_data.data and req_data.data[0].get("linked_task_id"):
+        task_id = req_data.data[0]["linked_task_id"]
+        remaining = supabase.table("crew_requests").select("id").eq("linked_task_id", task_id).in_("status", ["Nowe", "Potwierdzone"]).execute()
+        if not remaining.data:
+            supabase.table("tasks").update({"is_blocked": False, "blocker_reason": None}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def submit_crew_request_with_blocker(title, needed_by, is_blocker, linked_task_id=None):
+    """Karol zgłasza potrzebę — jeśli powiązane z zadaniem i jest pilne, auto-blokuje zadanie."""
+    payload = {"title": title, "needed_by": str(needed_by), "is_blocker": is_blocker, "status": "Nowe", "linked_task_id": linked_task_id}
+    supabase.table("crew_requests").insert(payload).execute()
+    if linked_task_id and is_blocker:
+        supabase.table("tasks").update({"is_blocked": True, "blocker_reason": f"Brak: {title}", "blocker_type": "MISSING_MATERIAL"}).eq("id", linked_task_id).execute()
+        supabase.table("task_blockers").insert({"task_id": linked_task_id, "blocker_type": "MISSING_MATERIAL", "description": f"Zgłoszono brak: {title}", "reported_by": "Karol", "is_resolved": False}).execute()
+    return {"status": "ok"}
+
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -423,20 +478,49 @@ if st.session_state["role"] == "crew":
                 st.rerun()
 
     with tab_rep:
-        st.subheader("📝 Dodaj Raport Dzienny / Zgłoś")
+        st.subheader("📝 Zgłoś potrzebę / brak materiału")
+        
+        all_tasks_resp = supabase.table("tasks").select("id, name").execute()
+        task_options_map = {"(brak powiązania)": None}
+        for t in (all_tasks_resp.data or []):
+            task_options_map[t['name']] = t['id']
+
         with st.form("crew_req_form", clear_on_submit=True):
             col1, col2 = st.columns([3, 1])
-            title = col1.text_input("Czego brakuje? (Blokada)")
-            needed = col2.date_input("Na kiedy potrzebne?")
-            blocker = st.checkbox("Pilne: To wstrzymuje nasze prace!")
-            if st.form_submit_button("Wyślij zgłoszenie"):
-                if not title.strip(): st.error("Wpisz nazwę")
+            title = col1.text_input("Czego brakuje? *", placeholder="np. Fuga Mapei szara 2kg")
+            needed = col2.date_input("Potrzebne do:")
+            linked_name = st.selectbox("Dotyczy zadania (opcjonalnie):", options=list(task_options_map.keys()))
+            blocker = st.checkbox("🚨 PILNE — To wstrzymuje nasze prace! (auto-zablokuje zadanie)")
+            if st.form_submit_button("Wyślij do Inwestora", type="primary"):
+                if not title.strip():
+                    st.error("Wpisz co jest potrzebne!")
                 else:
-                    supabase.table("crew_requests").insert({"title": title, "needed_by": str(needed), "is_blocker": blocker}).execute()
-                    st.success("Wysłano!")
+                    linked_id = task_options_map.get(linked_name)
+                    submit_crew_request_with_blocker(title, needed, blocker, linked_id)
+                    if blocker and linked_id:
+                        st.success(f"✅ Wysłano! Zadanie '{linked_name}' zostało oznaczone jako ZABLOKOWANE u Inwestora.")
+                    else:
+                        st.success("✅ Wysłano zgłoszenie!")
                     st.rerun()
-            
-    st.stop() 
+
+        st.divider()
+        st.subheader("📦 Status moich zgłoszeń")
+        my_grouped = get_crew_requests_grouped()
+        status_icons = {"Nowe": "🔴", "Potwierdzone": "🟡", "Dostarczone": "🟢", "Anulowane": "⬜"}
+        for status, reqs in my_grouped.items():
+            if not reqs: continue
+            with st.expander(f"{status_icons[status]} {status} ({len(reqs)})"):
+                for req in reqs:
+                    st.markdown(f"**{req['title']}**")
+                    if req.get("investor_note"):
+                        st.info(f"📝 Inwestor: {req['investor_note']}")
+                    if req.get("expected_delivery_date"):
+                        st.caption(f"📅 Dostawa: {req['expected_delivery_date']}")
+                    st.divider()
+
+    st.stop()
+
+
 
 
 # ==========================================
@@ -870,14 +954,70 @@ elif menu == "4a. Odbiór Prac":
 
 elif menu == "5. Ekipa":
     st.title("👷 Zapotrzebowania Ekipy")
-    df_reqs = read_table("crew_requests", select="id, title, status, needed_by, is_blocker")
-    if not df_reqs.empty:
-        df_reqs['is_blocker'] = df_reqs['is_blocker'].astype(bool)
-        edited_reqs = st.data_editor(df_reqs, disabled=["id", "title", "needed_by"], hide_index=True, use_container_width=True)
-        if st.button("💾 Zapisz"):
-            for _, row in edited_reqs.iterrows():
-                supabase.table("crew_requests").update({"status": row['status'], "is_blocker": bool(row['is_blocker'])}).eq("id", row['id']).execute()
-            st.rerun()
+    st.caption("Karol zgłasza czego potrzebuje. Potwierdź, że się tym zajmujesz i oznacz jako dostarczone.")
+
+    grouped = get_crew_requests_grouped()
+
+    nowe = grouped.get("Nowe", [])
+    potwierdzone = grouped.get("Potwierdzone", [])
+    dostarczone = grouped.get("Dostarczone", [])
+
+    # --- KPI ---
+    k1, k2, k3 = st.columns(3)
+    k1.metric("🔴 Nowe zgłoszenia", len(nowe))
+    k2.metric("🟡 W toku (potwierdzone)", len(potwierdzone))
+    k3.metric("🟢 Dostarczone", len(dostarczone))
+    st.divider()
+
+    # --- NOWE ---
+    if nowe:
+        st.subheader(f"🔴 Do obsługi ({len(nowe)})")
+        for req in nowe:
+            is_blocker = req.get("is_blocker", False)
+            with st.container(border=True):
+                col_info, col_btns = st.columns([3, 2])
+                with col_info:
+                    label = "🚨 PILNE — " if is_blocker else ""
+                    st.markdown(f"**{label}{req['title']}**")
+                    st.caption(f"Potrzebne do: {req.get('needed_by', '—')}")
+                with col_btns:
+                    with st.form(f"confirm_form_{req['id']}", clear_on_submit=True):
+                        note = st.text_input("Twoja notatka (opcjonalnie)", placeholder="np. Zamówiłem, dostawa czwartek", key=f"note_{req['id']}")
+                        delivery = st.date_input("Szacowana dostawa", key=f"del_{req['id']}")
+                        c1, c2 = st.columns(2)
+                        if c1.form_submit_button("✅ POTWIERDŹ", use_container_width=True, type="primary"):
+                            confirm_crew_request(req['id'], note, delivery)
+                            st.rerun()
+                        if c2.form_submit_button("❌ ANULUJ", use_container_width=True):
+                            cancel_crew_request(req['id'])
+                            st.rerun()
+    else:
+        st.success("✅ Brak nowych zgłoszeń!")
+
+    # --- POTWIERDZONE ---
+    if potwierdzone:
+        st.divider()
+        st.subheader(f"🟡 W toku — czekają na dostawę ({len(potwierdzone)})")
+        for req in potwierdzone:
+            with st.container(border=True):
+                col_info, col_btn = st.columns([3, 1])
+                with col_info:
+                    st.markdown(f"**{req['title']}**")
+                    if req.get("investor_note"):
+                        st.info(f"📝 {req['investor_note']}")
+                    if req.get("expected_delivery_date"):
+                        st.caption(f"📅 Szacowana dostawa: {req['expected_delivery_date']}")
+                with col_btn:
+                    if st.button("📦 DOSTARCZONE", key=f"del_btn_{req['id']}", use_container_width=True, type="primary"):
+                        mark_crew_request_delivered(req['id'])
+                        st.rerun()
+
+    # --- DOSTARCZONE (Historia) ---
+    if dostarczone:
+        with st.expander(f"📜 Historia dostarczonych ({len(dostarczone)})"):
+            for req in dostarczone:
+                st.caption(f"✅ {req['title']} — dostarczone {str(req.get('delivered_at',''))[:10]}")
+
 
 # ==========================================
 # NOWE MODUŁY SPRINT 4 (7-10)
