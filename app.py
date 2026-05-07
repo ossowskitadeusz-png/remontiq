@@ -102,6 +102,98 @@ def can_task_start(task_id):
     except Exception as e:
         return {"can_start": False, "reason": str(e)}
 
+def get_kanban_board():
+    try:
+        response = supabase.table("tasks").select("*").order("task_priority").execute()
+        tasks = response.data or []
+        kanban = {'BACKLOG': [], 'READY': [], 'IN_PROGRESS': [], 'AWAITING_INSPECTION': [], 'COMPLETED': []}
+        for task in tasks:
+            status = task.get('kanban_status') or 'BACKLOG'
+            if status in kanban: kanban[status].append(task)
+        return kanban
+    except Exception:
+        return {'BACKLOG': [], 'READY': [], 'IN_PROGRESS': [], 'AWAITING_INSPECTION': [], 'COMPLETED': []}
+
+def update_kanban_status(task_id, new_status):
+    supabase.table("tasks").update({"kanban_status": new_status}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def start_task(task_id):
+    supabase.table("tasks").update({"kanban_status": "IN_PROGRESS", "actual_start_date": datetime.now().isoformat()}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def submit_for_inspection(task_id, notes="", photos=None):
+    inspection_data = {"task_id": task_id, "submitted_by": "Karol", "submitted_at": datetime.now().isoformat(), "submission_notes": notes, "submission_photos": photos or [], "inspection_status": "PENDING"}
+    response = supabase.table("task_inspection").insert(inspection_data).execute()
+    supabase.table("tasks").update({"kanban_status": "AWAITING_INSPECTION"}).eq("id", task_id).execute()
+    return {"status": "ok", "inspection_id": response.data[0]['id'] if response.data else None}
+
+def report_blocker(task_id, blocker_type, description, priority=3):
+    blocker_data = {"task_id": task_id, "blocker_type": blocker_type, "description": description, "reported_by": "Karol", "reported_at": datetime.now().isoformat(), "priority": priority, "is_resolved": False}
+    response = supabase.table("task_blockers").insert(blocker_data).execute()
+    supabase.table("tasks").update({"is_blocked": True, "blocker_reason": description, "blocker_type": blocker_type, "kanban_status": "IN_PROGRESS"}).eq("id", task_id).execute()
+    return {"status": "ok", "blocker_id": response.data[0]['id'] if response.data else None}
+
+def get_blockers_for_task(task_id):
+    try:
+        return supabase.table("task_blockers").select("*").eq("task_id", task_id).eq("is_resolved", False).execute().data or []
+    except: return []
+
+def resolve_blocker(blocker_id, resolution_note=""):
+    response = supabase.table("task_blockers").select("task_id").eq("id", blocker_id).execute()
+    if not response.data: return {"status": "error"}
+    task_id = response.data[0]['task_id']
+    supabase.table("task_blockers").update({"is_resolved": True, "resolved_at": datetime.now().isoformat(), "resolution_note": resolution_note}).eq("id", blocker_id).execute()
+    remaining = supabase.table("task_blockers").select("id").eq("task_id", task_id).eq("is_resolved", False).execute()
+    if not remaining.data:
+        supabase.table("tasks").update({"is_blocked": False, "blocker_reason": None, "blocker_type": None}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def get_pending_inspections():
+    try:
+        return supabase.table("task_inspection").select("*").eq("inspection_status", "PENDING").order("submitted_at").execute().data or []
+    except: return []
+
+def approve_inspection(inspection_id, notes=""):
+    response = supabase.table("task_inspection").select("task_id").eq("id", inspection_id).execute()
+    if not response.data: return {"status": "error"}
+    task_id = response.data[0]['task_id']
+    supabase.table("task_inspection").update({"inspection_status": "APPROVED", "inspected_by": "Inwestor", "inspected_at": datetime.now().isoformat(), "inspection_notes": notes}).eq("id", inspection_id).execute()
+    supabase.table("tasks").update({"kanban_status": "COMPLETED", "status": "Done", "actual_end_date": datetime.now().isoformat(), "progress_percent": 100}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def request_rework(inspection_id, rework_description):
+    response = supabase.table("task_inspection").select("task_id").eq("id", inspection_id).execute()
+    if not response.data: return {"status": "error"}
+    task_id = response.data[0]['task_id']
+    supabase.table("task_inspection").update({"inspection_status": "REQUIRES_REWORK", "inspected_by": "Inwestor", "inspected_at": datetime.now().isoformat(), "rework_description": rework_description}).eq("id", inspection_id).execute()
+    supabase.table("tasks").update({"kanban_status": "IN_PROGRESS"}).eq("id", task_id).execute()
+    return {"status": "ok"}
+
+def get_crew_kpis():
+    try:
+        response = supabase.table("tasks").select("*").execute()
+        tasks = response.data or []
+        total = len(tasks)
+        in_progress = len([t for t in tasks if t.get('kanban_status') == 'IN_PROGRESS' and not t.get('is_blocked')])
+        blocked = len([t for t in tasks if t.get('is_blocked')])
+        completed = len([t for t in tasks if t.get('kanban_status') == 'COMPLETED'])
+        awaiting = len([t for t in tasks if t.get('kanban_status') == 'AWAITING_INSPECTION'])
+        
+        project_meta = get_project_metadata()
+        days_to_end = 0
+        if project_meta:
+            end_date = datetime.strptime(project_meta['planned_end_date'], "%Y-%m-%d").date()
+            days_to_end = (end_date - date.today()).days
+        
+        return {
+            "total_tasks": total, "in_progress": in_progress, "blocked": blocked, 
+            "completed": completed, "awaiting_inspection": awaiting, 
+            "days_to_end": max(0, days_to_end), "completion_rate": int((completed / total * 100) if total > 0 else 0)
+        }
+    except:
+        return {"total_tasks": 0, "in_progress": 0, "blocked": 0, "completed": 0, "awaiting_inspection": 0, "days_to_end": 0, "completion_rate": 0}
+
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -249,107 +341,100 @@ if st.session_state["role"] == "crew":
     
     st.divider()
     
-    tab_plan, tab_deps, tab_reqs, tab_rep = st.tabs(["📅 Mój Plan Tygodnia", "🔗 Zależności", "🛠️ Zgłoś Problem", "📝 Raport Dnia / Materiały"])
+    st.markdown("""
+<style>
+    .kpi-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 20px; color: white; text-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.1); font-weight: bold; }
+    .blocker-badge { background: #ff6b6b; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
     
-    with tab_plan:
-        st.subheader("➕ Zaplanuj zadanie na ten tydzień")
-        with st.form("new_task_form", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            task_name = c1.text_input("Nazwa zadania *", placeholder="np. Kucie i demontaż")
-            task_desc = c1.text_area("Opis techniczny", placeholder="Szczegóły co robić")
-            
-            start_date = c2.date_input("Start zadania *")
-            end_date = c2.date_input("Koniec zadania *")
-            
-            crew_members = c3.multiselect("Kto pracuje?", ["Ja (Karol)", "Pomocnik 1", "Specjalista"], default=["Ja (Karol)"])
-            
-            response = supabase.table("tasks").select("id, name").execute()
-            existing_tasks = {t['name']: t['id'] for t in (response.data or [])}
-            depends_on_names = st.multiselect("Które zadania muszą być gotowe ZANIM zacznę?", options=list(existing_tasks.keys()))
-            depends_on_ids = [existing_tasks[n] for n in depends_on_names]
-            
-            if st.form_submit_button("✅ Dodaj zadanie do planu", type="primary"):
-                if not task_name or not start_date or not end_date:
-                    st.error("Uzupełnij wymagane pola")
-                else:
-                    create_task_by_crew(task_name, task_desc, start_date, end_date, crew_members, depends_on_ids)
-                    st.success("Dodano zadanie!")
-                    st.rerun()
-
-        st.divider()
-        st.subheader("📋 Zaplanowane Zadania")
-        tasks = get_tasks_with_dependencies()
-        if not tasks:
-            st.info("Brak zadań.")
-        else:
-            for task in tasks:
+    st.subheader("📈 Szybki Przegląd")
+    kpis = get_crew_kpis()
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1: st.metric("🟢 Aktywne", kpis['in_progress'])
+    with col2: st.metric("❌ Zablokowane", kpis['blocked'])
+    with col3: st.metric("🔔 Do Odbioru", kpis['awaiting_inspection'])
+    with col4: st.metric("✅ Ukończone", kpis['completed'])
+    with col5: st.metric("⏳ Dni do Końca", kpis['days_to_end'])
+    
+    st.divider()
+    
+    tab_plan, tab_kanban, tab_rep = st.tabs(["🗂️ Tablica Kanban", "➕ Zaplanuj Zadanie", "📝 Raport Dnia / Zgłoś"])
+    
+    with tab_kanban:
+        kanban = get_kanban_board()
+        c1, c2, c3, c4 = st.columns(4)
+        
+        with c1:
+            st.markdown("### 📦 DO ZROBIENIA")
+            for task in kanban.get('BACKLOG', []) + kanban.get('READY', []):
                 with st.container(border=True):
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.markdown(f"### {task['name']} ({task['status']})")
-                        st.write(f"Okres: {task['planned_start_date']} do {task['planned_end_date']}")
-                        if task.get('investor_note'): st.warning(f"🟨 Uwaga Inwestora: {task['investor_note']}")
-                    with col2:
-                        if task['status'] != 'Done' and st.button("✅ UKOŃCZONE", key=f"crew_done_{task['id']}"):
-                            complete_task(task['id'])
+                    st.markdown(f"**{task['name']}**")
+                    st.caption(f"Start: {task['planned_start_date']}")
+                    if st.button("▶️ ROZPOCZNIJ", key=f"start_{task['id']}", use_container_width=True):
+                        start_task(task['id'])
+                        st.rerun()
+
+        with c2:
+            st.markdown("### 🟧 W TRAKCIE")
+            for task in kanban.get('IN_PROGRESS', []):
+                blocked = task.get('is_blocked', False)
+                with st.container(border=True):
+                    st.markdown(f"**{task['name']}**")
+                    if blocked: st.markdown("<span class='blocker-badge'>🔴 ZABLOKOWANE</span>", unsafe_allow_html=True)
+                    st.caption(f"Do: {task['planned_end_date']}")
+                    if blocked:
+                        st.warning(f"⛔ {task.get('blocker_reason')}")
+                    else:
+                        if st.button("🔔 DO ODBIORU", key=f"inspect_{task['id']}", use_container_width=True, type="primary"):
+                            submit_for_inspection(task['id'])
+                            st.rerun()
+                        if st.button("⛔ ZABLOKUJ", key=f"block_{task['id']}", use_container_width=True):
+                            report_blocker(task['id'], "OTHER", "Zgłoszona blokada z Kanbana")
                             st.rerun()
 
-    with tab_deps:
-        st.subheader("🔗 MAPA ZALEŻNOŚCI ZADAŃ")
-        if not tasks:
-            st.info("Brak zadań.")
-        else:
-            for idx, task in enumerate(tasks, 1):
-                st.markdown(f"**Z{idx}: {task['name']}**")
-                deps = task.get('depends_on_task_ids', [])
-                if deps:
-                    dep_names = [t['name'] for t in tasks if t['id'] in deps]
-                    st.caption(f"⬆️ Czeka na: {', '.join(dep_names)}")
-                else:
-                    st.caption("✅ Może startować od razu")
-                
-                dependent_tasks = [t['name'] for t in tasks if t.get('depends_on_task_ids') and task['id'] in t['depends_on_task_ids']]
-                if dependent_tasks:
-                    st.caption(f"⬇️ Blokuje start: {', '.join(dependent_tasks)}")
-                st.divider()
+        with c3:
+            st.markdown("### 🔔 DO ODBIORU")
+            for task in kanban.get('AWAITING_INSPECTION', []):
+                with st.container(border=True):
+                    st.markdown(f"**{task['name']}**")
+                    st.info("⏳ Czeka na akceptację")
 
-    with tab_reqs:
-        st.subheader("Zgłoś zapotrzebowanie / Blokadę")
-        with st.form("crew_req_form", clear_on_submit=True):
-            col1, col2 = st.columns([3, 1])
-            title = col1.text_input("Czego brakuje? (np. Fuga, deczyja o wannie)")
-            needed = col2.date_input("Na kiedy potrzebne?")
-            blocker = st.checkbox("Pilne: To wstrzymuje nasze prace!")
+        with c4:
+            st.markdown("### ✅ ZAMKNIĘTE")
+            for task in kanban.get('COMPLETED', []):
+                with st.container(border=True):
+                    st.markdown(f"**{task['name']}**")
+                    st.success("Zatwierdzone")
+
+    with tab_plan:
+        st.subheader("➕ Zaplanuj zadanie")
+        with st.form("new_task_form", clear_on_submit=True):
+            tc1, tc2 = st.columns(2)
+            task_name = tc1.text_input("Nazwa zadania *")
+            task_desc = tc1.text_area("Opis")
+            start_date = tc2.date_input("Start")
+            end_date = tc2.date_input("Koniec")
+            crew_members = st.multiselect("Kto pracuje?", ["Ja (Karol)", "Pomocnik"], default=["Ja (Karol)"])
             
-            task_options = {t['name']: t['id'] for t in tasks}
-            linked_task_name = st.selectbox("Dotyczy zadania (opcjonalnie):", ["Brak"] + list(task_options.keys()))
-            
-            if st.form_submit_button("Wyślij do Inwestora"):
-                if not title.strip(): st.error("Musisz wpisać nazwę!")
-                else:
-                    linked_id = task_options.get(linked_task_name)
-                    supabase.table("crew_requests").insert({"title": title, "needed_by": str(needed), "is_blocker": blocker, "linked_task_id": linked_id}).execute()
-                    st.success("Wysłano prośbę!")
-                    st.rerun()
+            if st.form_submit_button("Dodaj zadanie do tablicy"):
+                create_task_by_crew(task_name, task_desc, start_date, end_date, crew_members)
+                st.success("Dodano!")
+                st.rerun()
 
     with tab_rep:
-        st.subheader("📝 Dodaj Raport Dzienny")
-        with st.form("crew_log_form", clear_on_submit=True):
-            log_txt = st.text_area("Co zostało dzisiaj zrobione? Opóźnienia?")
-            if st.form_submit_button("Wyślij Raport do Inwestora"):
-                if log_txt.strip():
-                    supabase.table("daily_logs").insert({"content": log_txt.strip(), "author_role": "crew", "source": "crew_report", "date": str(date.today())}).execute()
-                    st.success("Wysłano raport!")
-                else: st.error("Wpisz treść raportu.")
-        
-        st.divider()
-        st.subheader("Materiały na miejscu")
-        res_v = supabase.table("crew_materials_view").select("name, location, quantity_received, unit").execute()
-        df_m = pd.DataFrame(res_v.data)
-        if df_m.empty: st.info("Brak materiałów")
-        else:
-            df_m.rename(columns={"name": "Materiał", "location": "Gdzie leży?", "quantity_received": "Ilość", "unit": "Jedn."}, inplace=True)
-            st.dataframe(df_m, use_container_width=True, hide_index=True)
+        st.subheader("📝 Dodaj Raport Dzienny / Zgłoś")
+        with st.form("crew_req_form", clear_on_submit=True):
+            col1, col2 = st.columns([3, 1])
+            title = col1.text_input("Czego brakuje? (Blokada)")
+            needed = col2.date_input("Na kiedy potrzebne?")
+            blocker = st.checkbox("Pilne: To wstrzymuje nasze prace!")
+            if st.form_submit_button("Wyślij zgłoszenie"):
+                if not title.strip(): st.error("Wpisz nazwę")
+                else:
+                    supabase.table("crew_requests").insert({"title": title, "needed_by": str(needed), "is_blocker": blocker}).execute()
+                    st.success("Wysłano!")
+                    st.rerun()
             
     st.stop() 
 
@@ -374,6 +459,7 @@ menu = st.sidebar.radio("Nawigacja", [
     "2. Start remontu", 
     "3. Materiały i sprzęty", 
     "4. Zadania", 
+    "4a. Odbiór Prac",
     "5. Ekipa", 
     "6. Wydatki (Finanse)",
     "7. Decyzje", 
@@ -710,6 +796,77 @@ elif menu == "4. Zadania":
                     complete_task(task_id)
                     st.success("Zadanie ukończone!")
                     st.rerun()
+
+elif menu == "4a. Odbi\u00f3r Prac":
+    st.title("\ud83d\udd14 ODBI\u00d3R PRAC")
+    st.caption("Karol zg\u0142osi\u0142 zako\u0144czenie zada\u0144. Sprawdzi je, dodaj komentarz i zatwierd\u017a lub za\u017c\u0105daj poprawek.")
+
+    pending = get_pending_inspections()
+
+    if not pending:
+        st.success("\u2705 Brak zada\u0144 czekaj\u0105cych na odbi\u00f3r. Wszystko zatwierdzone!")
+    else:
+        st.warning(f"\u23f3 **{len(pending)} zada\u0144 czeka na Tw\u00f3j odbi\u00f3r!**")
+        st.divider()
+
+        for inspection in pending:
+            # Pobierz dane zadania
+            task_resp = supabase.table("tasks").select("*").eq("id", inspection['task_id']).execute()
+            task = task_resp.data[0] if task_resp.data else {}
+
+            with st.container(border=True):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.markdown(f"### \ud83d\udd14 {task.get('name', 'Nieznane zadanie')}")
+                    st.caption(f"Zg\u0142oszono do odbioru: {inspection.get('submitted_at', '')[:10]}")
+                with col2:
+                    st.metric("Status", "\u23f3 Do odbioru")
+
+                st.write(f"**Zesp\u00f3\u0142:** {task.get('assigned_to', '\u2014')}")
+                if task.get('description'):
+                    st.write(f"**Zakres prac:** {task['description']}")
+                if inspection.get('submission_notes'):
+                    st.info(f"\ud83d\udcdd **Uwagi Karola:** {inspection['submission_notes']}")
+
+                st.divider()
+                st.write("**Twoja decyzja:**")
+
+                col_approve, col_rework = st.columns(2)
+                with col_approve:
+                    approve_note = st.text_input("Komentarz przy zatwierdzeniu (opcjonalnie)", key=f"approve_note_{inspection['id']}")
+                    if st.button("\u2705 ZATWIERD\u017b PRACE", key=f"approve_{inspection['id']}", use_container_width=True, type="primary"):
+                        result = approve_inspection(inspection['id'], approve_note)
+                        if result['status'] == 'ok':
+                            st.success(f"\u2705 Zadanie \"{task.get('name')}\" zatwierdzone! Karol zobaczy to na swojej tablicy.")
+                            st.rerun()
+
+                with col_rework:
+                    rework_desc = st.text_area("Opisz co wymaga poprawek *", key=f"rework_desc_{inspection['id']}", placeholder="np. Poprawi\u0107 k\u0105t nachylenia przy wannie")
+                    if st.button("\u274c WYMAGA POPRAWEK", key=f"rework_{inspection['id']}", use_container_width=True):
+                        if not rework_desc.strip():
+                            st.error("Musisz opisa\u0107 co wymaga poprawek!")
+                        else:
+                            result = request_rework(inspection['id'], rework_desc)
+                            if result['status'] == 'ok':
+                                st.warning(f"\u274c Zadanie \"{task.get('name')}\" wr\u00f3ci\u0142o do Karola z opisem poprawek.")
+                                st.rerun()
+
+    st.divider()
+    st.subheader("\ud83d\udcdc Historia odbior\u00f3w")
+    try:
+        history = supabase.table("task_inspection").select("*").neq("inspection_status", "PENDING").order("inspected_at", desc=True).execute()
+        if history.data:
+            for item in history.data:
+                task_r = supabase.table("tasks").select("name").eq("id", item['task_id']).execute()
+                task_name = task_r.data[0]['name'] if task_r.data else "?"
+                icon = "\u2705" if item['inspection_status'] == "APPROVED" else "\u274c"
+                st.caption(f"{icon} **{task_name}** \u2014 {item['inspection_status']} \u2014 {str(item.get('inspected_at',''))[:10]}")
+                if item.get('rework_description'):
+                    st.caption(f"   \u21b3 Poprawki: {item['rework_description']}")
+        else:
+            st.info("Brak historii odbioru.")
+    except Exception as e:
+        st.error(f"B\u0142\u0105d wczytywania historii: {e}")
 
 elif menu == "5. Ekipa":
     st.title("👷 Zapotrzebowania Ekipy")
