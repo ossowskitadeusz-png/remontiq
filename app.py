@@ -35,7 +35,6 @@ def get_project_metadata():
     return res.data[0] if res.data else None
 
 def create_project_metadata(**kwargs):
-    kwargs['created_by'] = "investor_user"
     if 'planned_start_date' in kwargs and isinstance(kwargs['planned_start_date'], date):
         kwargs['planned_start_date'] = kwargs['planned_start_date'].isoformat()
     if 'planned_end_date' in kwargs and isinstance(kwargs['planned_end_date'], date):
