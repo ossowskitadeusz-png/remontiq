@@ -6,12 +6,21 @@
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on_tasks TEXT[] DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by_crew BOOLEAN DEFAULT FALSE;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS investor_note TEXT;
-ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on_task_ids BIGINT[] DEFAULT ARRAY[]::BIGINT[];
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on_task_ids UUID[] DEFAULT ARRAY[]::UUID[];
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS task_phase VARCHAR(50) DEFAULT 'EXECUTION';
 
+-- Uzupełnienie brakujących kolumn ze specyfikacji (Paczka 1)
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS planned_start_date DATE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS planned_end_date DATE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_start_date DATE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_end_date DATE;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress_percent INT DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_to TEXT;
+
 -- KROK 2: Dodaj nowe kolumny do tabeli CREW_REQUESTS
-ALTER TABLE crew_requests ADD COLUMN IF NOT EXISTS linked_task_id BIGINT REFERENCES tasks(id) ON DELETE SET NULL;
-ALTER TABLE crew_requests ADD COLUMN IF NOT EXISTS is_blocker_for_task_ids BIGINT[] DEFAULT ARRAY[]::BIGINT[];
+ALTER TABLE crew_requests ADD COLUMN IF NOT EXISTS linked_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL;
+ALTER TABLE crew_requests ADD COLUMN IF NOT EXISTS is_blocker_for_task_ids UUID[] DEFAULT ARRAY[]::UUID[];
 ALTER TABLE crew_requests ADD COLUMN IF NOT EXISTS priority_score INT DEFAULT 50;
 
 -- KROK 3: Stwórz VIEW do pobierania zadań z informacją o zależnościach
