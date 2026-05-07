@@ -78,6 +78,16 @@ def add_investor_note(task_id, note):
     supabase.table("tasks").update({"investor_note": note}).eq("id", task_id).execute()
     return {"status": "ok"}
 
+def create_task_by_crew(task_name, task_description, planned_start_date, planned_end_date, assigned_to, depends_on_tasks=None):
+    payload = {
+        "name": task_name, "description": task_description,
+        "planned_start_date": planned_start_date.isoformat(), "planned_end_date": planned_end_date.isoformat(),
+        "assigned_to": ", ".join(assigned_to), "status": "Backlog", "progress_percent": 0,
+        "created_by_crew": True, "depends_on_task_ids": depends_on_tasks or []
+    }
+    supabase.table("tasks").insert(payload).execute()
+    return {"status": "ok"}
+
 def can_task_start(task_id):
     try:
         task = supabase.table("tasks_with_dependencies").select("*").eq("id", task_id).execute()
@@ -238,43 +248,110 @@ if st.session_state["role"] == "crew":
     if random.random() > 0.7:  # 30% chance to show a bonus meme
         st.warning(get_bonus_meme())
     
-    # RAPORT DNIA EKIPY (Wrzucany do Dziennika Inwestora)
-    with st.expander("📝 Dodaj Raport z prac (Dziennik)", expanded=True):
+    st.divider()
+    
+    tab_plan, tab_deps, tab_reqs, tab_rep = st.tabs(["📅 Mój Plan Tygodnia", "🔗 Zależności", "🛠️ Zgłoś Problem", "📝 Raport Dnia / Materiały"])
+    
+    with tab_plan:
+        st.subheader("➕ Zaplanuj zadanie na ten tydzień")
+        with st.form("new_task_form", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            task_name = c1.text_input("Nazwa zadania *", placeholder="np. Kucie i demontaż")
+            task_desc = c1.text_area("Opis techniczny", placeholder="Szczegóły co robić")
+            
+            start_date = c2.date_input("Start zadania *")
+            end_date = c2.date_input("Koniec zadania *")
+            
+            crew_members = c3.multiselect("Kto pracuje?", ["Ja (Karol)", "Pomocnik 1", "Specjalista"], default=["Ja (Karol)"])
+            
+            response = supabase.table("tasks").select("id, name").execute()
+            existing_tasks = {t['name']: t['id'] for t in (response.data or [])}
+            depends_on_names = st.multiselect("Które zadania muszą być gotowe ZANIM zacznę?", options=list(existing_tasks.keys()))
+            depends_on_ids = [existing_tasks[n] for n in depends_on_names]
+            
+            if st.form_submit_button("✅ Dodaj zadanie do planu", type="primary"):
+                if not task_name or not start_date or not end_date:
+                    st.error("Uzupełnij wymagane pola")
+                else:
+                    create_task_by_crew(task_name, task_desc, start_date, end_date, crew_members, depends_on_ids)
+                    st.success("Dodano zadanie!")
+                    st.rerun()
+
+        st.divider()
+        st.subheader("📋 Zaplanowane Zadania")
+        tasks = get_tasks_with_dependencies()
+        if not tasks:
+            st.info("Brak zadań.")
+        else:
+            for task in tasks:
+                with st.container(border=True):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.markdown(f"### {task['name']} ({task['status']})")
+                        st.write(f"Okres: {task['planned_start_date']} do {task['planned_end_date']}")
+                        if task.get('investor_note'): st.warning(f"🟨 Uwaga Inwestora: {task['investor_note']}")
+                    with col2:
+                        if task['status'] != 'Done' and st.button("✅ UKOŃCZONE", key=f"crew_done_{task['id']}"):
+                            complete_task(task['id'])
+                            st.rerun()
+
+    with tab_deps:
+        st.subheader("🔗 MAPA ZALEŻNOŚCI ZADAŃ")
+        if not tasks:
+            st.info("Brak zadań.")
+        else:
+            for idx, task in enumerate(tasks, 1):
+                st.markdown(f"**Z{idx}: {task['name']}**")
+                deps = task.get('depends_on_task_ids', [])
+                if deps:
+                    dep_names = [t['name'] for t in tasks if t['id'] in deps]
+                    st.caption(f"⬆️ Czeka na: {', '.join(dep_names)}")
+                else:
+                    st.caption("✅ Może startować od razu")
+                
+                dependent_tasks = [t['name'] for t in tasks if t.get('depends_on_task_ids') and task['id'] in t['depends_on_task_ids']]
+                if dependent_tasks:
+                    st.caption(f"⬇️ Blokuje start: {', '.join(dependent_tasks)}")
+                st.divider()
+
+    with tab_reqs:
+        st.subheader("Zgłoś zapotrzebowanie / Blokadę")
+        with st.form("crew_req_form", clear_on_submit=True):
+            col1, col2 = st.columns([3, 1])
+            title = col1.text_input("Czego brakuje? (np. Fuga, deczyja o wannie)")
+            needed = col2.date_input("Na kiedy potrzebne?")
+            blocker = st.checkbox("Pilne: To wstrzymuje nasze prace!")
+            
+            task_options = {t['name']: t['id'] for t in tasks}
+            linked_task_name = st.selectbox("Dotyczy zadania (opcjonalnie):", ["Brak"] + list(task_options.keys()))
+            
+            if st.form_submit_button("Wyślij do Inwestora"):
+                if not title.strip(): st.error("Musisz wpisać nazwę!")
+                else:
+                    linked_id = task_options.get(linked_task_name)
+                    supabase.table("crew_requests").insert({"title": title, "needed_by": str(needed), "is_blocker": blocker, "linked_task_id": linked_id}).execute()
+                    st.success("Wysłano prośbę!")
+                    st.rerun()
+
+    with tab_rep:
+        st.subheader("📝 Dodaj Raport Dzienny")
         with st.form("crew_log_form", clear_on_submit=True):
-            log_txt = st.text_area("Co zostało dzisiaj zrobione? Jakieś opóźnienia?")
+            log_txt = st.text_area("Co zostało dzisiaj zrobione? Opóźnienia?")
             if st.form_submit_button("Wyślij Raport do Inwestora"):
                 if log_txt.strip():
-                    supabase.table("daily_logs").insert({
-                        "content": log_txt.strip(), 
-                        "author_role": "crew", 
-                        "source": "crew_report",
-                        "date": str(date.today())
-                    }).execute()
-                    st.success("Wysłano raport do Dziennika Inwestora!")
-                else:
-                    st.error("Wpisz treść raportu.")
-
-    st.subheader("1. Zgłoś zapotrzebowanie / Zablokowanie")
-    with st.form("crew_req_form", clear_on_submit=True):
-        col1, col2 = st.columns([3, 1])
-        title = col1.text_input("Czego brakuje? (np. Fuga Mapei 110, pędzle)")
-        needed = col2.date_input("Na kiedy potrzebne?")
-        blocker = st.checkbox("Pilne: To wstrzymuje nasze prace!")
-        if st.form_submit_button("Wyślij do Inwestora"):
-            if not title.strip(): st.error("Musisz wpisać nazwę!")
-            else:
-                supabase.table("crew_requests").insert({"title": title, "needed_by": str(needed), "is_blocker": blocker}).execute()
-                st.success("Wysłano prośbę do Inwestora!")
-                st.rerun()
-                
-    st.divider()
-    st.subheader("2. Materiały dostępne na miejscu")
-    res_v = supabase.table("crew_materials_view").select("name, location, quantity_received, unit").execute()
-    df_m = pd.DataFrame(res_v.data)
-    if df_m.empty: st.info("Brak materiałów oznaczonych jako gotowe na budowie.")
-    else:
-        df_m.rename(columns={"name": "Materiał", "location": "Gdzie leży?", "quantity_received": "Ilość", "unit": "Jedn."}, inplace=True)
-        st.dataframe(df_m, use_container_width=True, hide_index=True)
+                    supabase.table("daily_logs").insert({"content": log_txt.strip(), "author_role": "crew", "source": "crew_report", "date": str(date.today())}).execute()
+                    st.success("Wysłano raport!")
+                else: st.error("Wpisz treść raportu.")
+        
+        st.divider()
+        st.subheader("Materiały na miejscu")
+        res_v = supabase.table("crew_materials_view").select("name, location, quantity_received, unit").execute()
+        df_m = pd.DataFrame(res_v.data)
+        if df_m.empty: st.info("Brak materiałów")
+        else:
+            df_m.rename(columns={"name": "Materiał", "location": "Gdzie leży?", "quantity_received": "Ilość", "unit": "Jedn."}, inplace=True)
+            st.dataframe(df_m, use_container_width=True, hide_index=True)
+            
     st.stop() 
 
 
