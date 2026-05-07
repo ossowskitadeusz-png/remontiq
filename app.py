@@ -538,18 +538,18 @@ else:
     st.sidebar.warning("⚠️ Charter nie utworzony")
 
 menu = st.sidebar.radio("Nawigacja", [
-    "0. Charter Projektu",
-    "1. Dashboard (Centrum)", 
-    "2. Start remontu", 
-    "3. Materiały i sprzęty", 
-    "4. Zadania", 
+    "1. Dashboard (Centrum)",
+    "2. Start remontu",
+    "3. Materiały i sprzęty",
+    "4. Zadania",
     "4a. Odbiór Prac",
-    "5. Ekipa", 
+    "5. Ekipa",
     "6. Wydatki (Finanse)",
-    "7. Decyzje", 
-    "8. Ryzyka", 
-    "9. Dziennik", 
-    "10. Ustawienia"
+    "7. Decyzje",
+    "8. Ryzyka",
+    "9. Dziennik",
+    "10. Ustawienia",
+    "0. Charter Projektu",
 ])
 
 # Pomocnicza lista pokoi
