@@ -797,16 +797,16 @@ elif menu == "4. Zadania":
                     st.success("Zadanie ukończone!")
                     st.rerun()
 
-elif menu == "4a. Odbi\u00f3r Prac":
-    st.title("\ud83d\udd14 ODBI\u00d3R PRAC")
-    st.caption("Karol zg\u0142osi\u0142 zako\u0144czenie zada\u0144. Sprawdzi je, dodaj komentarz i zatwierd\u017a lub za\u017c\u0105daj poprawek.")
+elif menu == "4a. Odbiór Prac":
+    st.title("🔔 ODBIÓR PRAC")
+    st.caption("Karol zgłosił zakończenie zadań. Sprawdzi je, dodaj komentarz i zatwierdź lub zażąda poprawek.")
 
     pending = get_pending_inspections()
 
     if not pending:
-        st.success("\u2705 Brak zada\u0144 czekaj\u0105cych na odbi\u00f3r. Wszystko zatwierdzone!")
+        st.success("✅ Brak zadań czekających na odbiór. Wszystko zatwierdzone!")
     else:
-        st.warning(f"\u23f3 **{len(pending)} zada\u0144 czeka na Tw\u00f3j odbi\u00f3r!**")
+        st.warning(f"⏳ **{len(pending)} zadań czeka na Twój odbiór!**")
         st.divider()
 
         for inspection in pending:
@@ -817,16 +817,16 @@ elif menu == "4a. Odbi\u00f3r Prac":
             with st.container(border=True):
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    st.markdown(f"### \ud83d\udd14 {task.get('name', 'Nieznane zadanie')}")
-                    st.caption(f"Zg\u0142oszono do odbioru: {inspection.get('submitted_at', '')[:10]}")
+                    st.markdown(f"### 🔔 {task.get('name', 'Nieznane zadanie')}")
+                    st.caption(f"Zgłoszono do odbioru: {inspection.get('submitted_at', '')[:10]}")
                 with col2:
-                    st.metric("Status", "\u23f3 Do odbioru")
+                    st.metric("Status", "⏳ Do odbioru")
 
-                st.write(f"**Zesp\u00f3\u0142:** {task.get('assigned_to', '\u2014')}")
+                st.write(f"**Zespół:** {task.get('assigned_to', '—')}")
                 if task.get('description'):
                     st.write(f"**Zakres prac:** {task['description']}")
                 if inspection.get('submission_notes'):
-                    st.info(f"\ud83d\udcdd **Uwagi Karola:** {inspection['submission_notes']}")
+                    st.info(f"📝 **Uwagi Karola:** {inspection['submission_notes']}")
 
                 st.divider()
                 st.write("**Twoja decyzja:**")
@@ -834,39 +834,39 @@ elif menu == "4a. Odbi\u00f3r Prac":
                 col_approve, col_rework = st.columns(2)
                 with col_approve:
                     approve_note = st.text_input("Komentarz przy zatwierdzeniu (opcjonalnie)", key=f"approve_note_{inspection['id']}")
-                    if st.button("\u2705 ZATWIERD\u017b PRACE", key=f"approve_{inspection['id']}", use_container_width=True, type="primary"):
+                    if st.button("✅ ZATWIERDŹ PRACE", key=f"approve_{inspection['id']}", use_container_width=True, type="primary"):
                         result = approve_inspection(inspection['id'], approve_note)
                         if result['status'] == 'ok':
-                            st.success(f"\u2705 Zadanie \"{task.get('name')}\" zatwierdzone! Karol zobaczy to na swojej tablicy.")
+                            st.success(f"✅ Zadanie \"{task.get('name')}\" zatwierdzone! Karol zobaczy to na swojej tablicy.")
                             st.rerun()
 
                 with col_rework:
-                    rework_desc = st.text_area("Opisz co wymaga poprawek *", key=f"rework_desc_{inspection['id']}", placeholder="np. Poprawi\u0107 k\u0105t nachylenia przy wannie")
-                    if st.button("\u274c WYMAGA POPRAWEK", key=f"rework_{inspection['id']}", use_container_width=True):
+                    rework_desc = st.text_area("Opisz co wymaga poprawek *", key=f"rework_desc_{inspection['id']}", placeholder="np. Poprawić kąt nachylenia przy wannie")
+                    if st.button("❌ WYMAGA POPRAWEK", key=f"rework_{inspection['id']}", use_container_width=True):
                         if not rework_desc.strip():
-                            st.error("Musisz opisa\u0107 co wymaga poprawek!")
+                            st.error("Musisz opisać co wymaga poprawek!")
                         else:
                             result = request_rework(inspection['id'], rework_desc)
                             if result['status'] == 'ok':
-                                st.warning(f"\u274c Zadanie \"{task.get('name')}\" wr\u00f3ci\u0142o do Karola z opisem poprawek.")
+                                st.warning(f"❌ Zadanie \"{task.get('name')}\" wróciło do Karola z opisem poprawek.")
                                 st.rerun()
 
     st.divider()
-    st.subheader("\ud83d\udcdc Historia odbior\u00f3w")
+    st.subheader("📜 Historia odbiorów")
     try:
         history = supabase.table("task_inspection").select("*").neq("inspection_status", "PENDING").order("inspected_at", desc=True).execute()
         if history.data:
             for item in history.data:
                 task_r = supabase.table("tasks").select("name").eq("id", item['task_id']).execute()
                 task_name = task_r.data[0]['name'] if task_r.data else "?"
-                icon = "\u2705" if item['inspection_status'] == "APPROVED" else "\u274c"
-                st.caption(f"{icon} **{task_name}** \u2014 {item['inspection_status']} \u2014 {str(item.get('inspected_at',''))[:10]}")
+                icon = "✅" if item['inspection_status'] == "APPROVED" else "❌"
+                st.caption(f"{icon} **{task_name}** — {item['inspection_status']} — {str(item.get('inspected_at',''))[:10]}")
                 if item.get('rework_description'):
-                    st.caption(f"   \u21b3 Poprawki: {item['rework_description']}")
+                    st.caption(f"   ↳ Poprawki: {item['rework_description']}")
         else:
             st.info("Brak historii odbioru.")
     except Exception as e:
-        st.error(f"B\u0142\u0105d wczytywania historii: {e}")
+        st.error(f"Błąd wczytywania historii: {e}")
 
 elif menu == "5. Ekipa":
     st.title("👷 Zapotrzebowania Ekipy")
