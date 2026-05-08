@@ -1211,6 +1211,7 @@ else:
 
 menu = st.sidebar.radio("Nawigacja", [
     "1. Dashboard (Centrum)",
+    "1a. Centrum Komunikacji",
     "2. Start remontu",
     "3. Materiały i sprzęty",
     "4. Zadania",
@@ -1506,6 +1507,54 @@ elif menu == "1. Dashboard (Centrum)":
         st.info("Karol jeszcze nie zaplanował zadań.")
 
 
+
+elif menu == "1a. Centrum Komunikacji":
+    st.markdown("## 💬 Centrum Komunikacji (Inwestor)")
+    st.caption("Przeglądaj wszystkie rozmowy i zdjęcia z budowy.")
+    
+    tasks_all = get_tasks_ordered()
+    f_c1, f_c2 = st.columns(2)
+    f_task = f_c1.selectbox("🔍 Zadanie", ["Wszystkie"] + [t['name'] for t in tasks_all], key="inv_f_task")
+    f_auth = f_c2.selectbox("👤 Autor", ["Wszyscy", "Karol", "Ja (Inwestor)"], key="inv_f_auth")
+    
+    role_map = {"Karol": "crew", "Ja (Inwestor)": "investor"}
+    comments = get_filtered_comments(
+        task_name=None if f_task == "Wszystkie" else f_task,
+        author_role=role_map.get(f_auth)
+    )
+    
+    if not comments:
+        st.info("Brak wiadomości.")
+    else:
+        for c in comments:
+            with st.container(border=True):
+                h_col, j_col = st.columns([4, 1])
+                with h_col:
+                    icon = "🟡" if c['author_role'] == 'crew' else "🔵"
+                    st.markdown(f"{icon} **{c['author_name']}** | {c['task_name']} | <span style='color:grey'>{c['created_at'][11:16]}</span>", unsafe_allow_html=True)
+                    st.write(f"> {c['content']}")
+                    if c.get('image_url'):
+                        with st.expander("📸 Zobacz zdjęcie"):
+                            st.image(c['image_url'], use_container_width=True)
+                with j_col:
+                    if st.button("👁️ POKAŻ", key=f"inv_jump_{c['id']}"):
+                        st.session_state.jump_to_task_id = c['task_id']
+                        st.info(f"Zadanie '{c['task_name']}' gotowe do podglądu!")
+                    if st.button("↩️ ODPOWIEDZ", key=f"inv_rep_{c['id']}"):
+                        st.session_state.reply_to_comment_id = c['id']
+                
+                if st.session_state.get("reply_to_comment_id") == c['id']:
+                    with st.form(f"inv_rep_form_{c['id']}", clear_on_submit=True):
+                        rep_txt = st.text_area("Twoja wiadomość")
+                        rep_img = st.file_uploader("Załącz zdjęcie", type=["jpg", "png"], key=f"inv_rep_img_{c['id']}")
+                        if st.form_submit_button("Wyślij odpowiedź"):
+                            url = None
+                            if rep_img:
+                                res = upload_task_photo(c['task_id'], rep_img)
+                                if res['success']: url = res['url']
+                            add_comment_with_photo(c['task_id'], "Inwestor", "investor", rep_txt, url)
+                            st.session_state.reply_to_comment_id = None
+                            st.rerun()
 
 elif menu == "2. Start remontu":
     st.title("🚀 Kreator Startowy (Cloud)")
