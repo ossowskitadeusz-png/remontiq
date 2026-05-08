@@ -1512,76 +1512,52 @@ elif menu == "1. Dashboard (Centrum)":
     st.caption(f"Centrum kontroli projektu — {date.today().strftime('%d.%m.%Y')}")
 
     # ==============================
-    # DANE
+    # DANE v6.0
     # ==============================
-    all_tasks_data = supabase.table("tasks").select("*").execute().data or []
+    all_tasks = supabase.table("tasks").select("*").execute().data or []
     pending_insp = get_pending_inspections()
-    crew_grouped = get_crew_requests_grouped()
-    new_requests = crew_grouped.get("Nowe", [])
-    blocked_tasks = [t for t in all_tasks_data if t.get("is_blocked")]
-    awaiting_insp = [t for t in all_tasks_data if t.get("kanban_status") == "AWAITING_INSPECTION"]
-
-    try:
-        decisions_data = supabase.table("decisions").select("*").eq("status", "Do podjęcia").execute().data or []
-        urgent_decisions = [d for d in decisions_data if d.get("due_date") and (date.fromisoformat(d["due_date"]) - date.today()).days <= 7]
-    except Exception:
-        urgent_decisions = []
-
-    try:
-        risks_data = supabase.table("issues").select("*").not_.in_("status", ["Rozwiązane", "Zignorowane"]).execute().data or []
-        critical_risks = [r for r in risks_data if r.get("severity") == "Krytyczne"]
-    except Exception:
-        risks_data, critical_risks = [], []
+    all_logs = supabase.table("project_logs").select("*").execute().data or []
+    
+    blocked_tasks = [t for t in all_tasks if t.get("is_blocked")]
+    active_decisions = [l for l in all_logs if l['type'] == 'DECISION' and l['status'] != 'DONE']
+    active_issues = [l for l in all_logs if l['type'] == 'ISSUE' and l['status'] != 'RESOLVED']
 
     # ==============================
     # SEKCJA 1: ALARMY
     # ==============================
     st.markdown("## ⚡ WYMAGAJĄ TWOJEGO DZIAŁANIA")
-
-    def alarm_color(n): return "#e53e3e" if n > 0 else "#38a169"
-    def alarm_bg(n): return "rgba(229,62,62,0.08)" if n > 0 else "rgba(56,161,105,0.08)"
-
     c1, c2, c3, c4 = st.columns(4)
-    for col, label, emoji, count, sub in [
-        (c1, "Do Odbioru", "🔔", len(pending_insp), ""),
-        (c2, "Blokery", "🔴", len(blocked_tasks), ""),
-        (c3, "Decyzje", "🤔", len(urgent_decisions), "deadline ≤7 dni"),
-        (c4, "Ryzyka", "⚠️", len(risks_data), f"{len(critical_risks)} kryt."),
-    ]:
+    
+    def render_tile(col, label, emoji, count, sub):
+        clr = "#e53e3e" if count > 0 else "#38a169"
+        bg = "rgba(229,62,62,0.08)" if count > 0 else "rgba(56,161,105,0.08)"
         col.markdown(f"""
-        <div style="background:{alarm_bg(count)};border:2px solid {alarm_color(count)};border-radius:10px;padding:16px;text-align:center;">
+        <div style="background:{bg};border:2px solid {clr};border-radius:10px;padding:16px;text-align:center;">
             <div style="font-size:28px">{emoji}</div>
             <div style="font-size:13px;color:#888">{label}</div>
-            <div style="font-size:36px;font-weight:bold;color:{alarm_color(count)}">{count}</div>
+            <div style="font-size:36px;font-weight:bold;color:{clr}">{count}</div>
             <div style="font-size:11px;color:#aaa">{sub}</div>
         </div>""", unsafe_allow_html=True)
 
-    st.divider()
+    render_tile(c1, "Do Odbioru", "🔔", len(pending_insp), "")
+    render_tile(c2, "Blokery", "🔴", len(blocked_tasks), "")
+    render_tile(c3, "Decyzje", "🤔", len(active_decisions), "Aktywne logi")
+    render_tile(c4, "Problemy", "⚠️", len(active_issues), "Nierozwiązane")
 
+    st.divider()
+    
     # ==============================
     # SEKCJA 2: PULS PROJEKTU
     # ==============================
     st.markdown("## 📊 PULS PROJEKTU")
-    
-    # --- HEALTH SCORE WIDGET (Sprint 10) ---
-    h = calculate_health_score()
-    col_h1, col_h2 = st.columns([1, 3])
-    with col_h1:
-        st.markdown(f"""
-            <div style="text-align:center; padding:15px; border-radius:10px; background:#1a1f2e; border:1px solid #2d3748">
-                <h3 style="margin:0; color:#a0aec0">HEALTH</h3>
-                <h1 style="margin:0; font-size:40px">{h['score']}%</h1>
-                <p style="margin:0">{h['status']}</p>
-            </div>
-        """, unsafe_allow_html=True)
-    with col_h2:
-        m = h['metrics']
-        d = h['details']
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Postęp", f"{m['progress']}%", f"{d['completed']}/{d['total']}")
-        c2.metric("Terminy", f"{m['schedule']}%", f"-{d['delay']}d")
-        c3.metric("Budżet", f"{m['budget']}%", f"{d['pct']}%")
-        c4.metric("Blokery", f"{m['blockers']}%", f"{d['blockers']} szt")
+    if project_meta:
+        days_info = get_project_days_info(project_meta)
+        col_h1, col_h2 = st.columns([1, 2])
+        with col_h1:
+            st.metric("Postęp Całkowity", f"{days_info['progress_pct']}%")
+        with col_h2:
+            st.progress(days_info['progress_pct'] / 100)
+            st.caption(f"Upłynęło dni: {days_info['elapsed_days']} / {days_info['total_days']}")
     
     st.divider()
 
@@ -1955,7 +1931,7 @@ elif menu == "5. Ekipa":
 
 elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
     st.title("📒 Dziennik Projektu")
-    st.write("Centralne miejsce zarządzania decyzjami i problemami.")
+    st.write("Decyzje i problemy w jednym miejscu.")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -1980,10 +1956,15 @@ elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
         recs = supabase.table("project_logs").select("*").eq("type", "DECISION").execute().data or []
         if recs:
             df = pd.DataFrame(recs)
+            # Czyścimy NaN
+            df = df.where(pd.notnull(df), None)
             ed = st.data_editor(df[['id', 'title', 'status', 'due_date', 'result']], key="ed_dec", width="stretch")
             if st.button("Zapisz zmiany (Decyzje)"):
                 for _, r in ed.iterrows():
-                    supabase.table("project_logs").update({"status": r['status'], "result": r['result']}).eq("id", r['id']).execute()
+                    supabase.table("project_logs").update({
+                        "status": r['status'] or "OPEN", 
+                        "result": r['result'] or ""
+                    }).eq("id", r['id']).execute()
                 st.rerun()
         else: st.info("Brak decyzji.")
 
@@ -1991,16 +1972,16 @@ elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
         recs = supabase.table("project_logs").select("*").eq("type", "ISSUE").execute().data or []
         if recs:
             df = pd.DataFrame(recs)
+            df = df.where(pd.notnull(df), None)
             ed = st.data_editor(df[['id', 'title', 'severity', 'status']], key="ed_iss", width="stretch")
             if st.button("Zapisz zmiany (Problemy)"):
                 for _, r in ed.iterrows():
-                    supabase.table("project_logs").update({"status": r['status'], "severity": r['severity']}).eq("id", r['id']).execute()
+                    supabase.table("project_logs").update({
+                        "status": r['status'] or "OPEN", 
+                        "severity": r['severity'] or "MEDIUM"
+                    }).eq("id", r['id']).execute()
                 st.rerun()
         else: st.info("Brak problemów.")
-            
-        st.divider()
-        st.subheader("Przekształć w zadanie (Genialny Workflow)")
-        st.caption("Masz problem, który chcesz zamienić na zadanie do wykonania? Połączmy je.")
 
 elif menu == "8. Ustawienia":
     st.title("⚙️ Ustawienia i Eksport")
@@ -2015,12 +1996,10 @@ elif menu == "8. Ustawienia":
             st.rerun()
             
     st.divider()
-    st.subheader("📊 Eksport Danych Księgowych")
-    st.caption("Pobierz całą historię finansową do pliku CSV (Otworzysz go w Excelu).")
+    st.subheader("📊 Eksport Danych")
     df_exp_full = read_table("expenses")
     if not df_exp_full.empty:
         csv = df_exp_full.to_csv(index=False).encode('utf-8')
-        st.download_button("Pobierz historię wydatków (CSV)", data=csv, file_name="remontiq_wydatki.csv", mime="text/csv")
     else:
         st.info("Brak wprowadzonych wydatków.")
         
