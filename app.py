@@ -1983,7 +1983,15 @@ elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
             ed = st.data_editor(df[['id', 'title', 'status', 'due_date', 'result']], key="ed_dec", width="stretch")
             if st.button("Zapisz zmiany (Decyzje)"):
                 for _, r in ed.iterrows():
-                    supabase.table("project_logs").update({"status": r['status'], "result": r['result']}).eq("id", r['id']).execute()
+                    # Czyścimy dane z NaN (puste pola w Pandas)
+                    clean_status = r['status'] if pd.notnull(r['status']) else "OPEN"
+                    clean_result = r['result'] if pd.notnull(r['result']) else ""
+                    
+                    supabase.table("project_logs").update({
+                        "status": clean_status, 
+                        "result": clean_result
+                    }).eq("id", r['id']).execute()
+                st.success("Zapisano decyzje!")
                 st.rerun()
         else: st.info("Brak decyzji.")
 
@@ -1994,7 +2002,15 @@ elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
             ed = st.data_editor(df[['id', 'title', 'severity', 'status']], key="ed_iss", width="stretch")
             if st.button("Zapisz zmiany (Problemy)"):
                 for _, r in ed.iterrows():
-                    supabase.table("project_logs").update({"status": r['status'], "severity": r['severity']}).eq("id", r['id']).execute()
+                    # Czyścimy dane z NaN
+                    clean_status = r['status'] if pd.notnull(r['status']) else "OPEN"
+                    clean_sev = r['severity'] if pd.notnull(r['severity']) else "MEDIUM"
+                    
+                    supabase.table("project_logs").update({
+                        "status": clean_status, 
+                        "severity": clean_sev
+                    }).eq("id", r['id']).execute()
+                st.success("Zapisano problemy!")
                 st.rerun()
         else: st.info("Brak problemów.")
             
