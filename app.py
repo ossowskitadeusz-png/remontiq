@@ -614,12 +614,92 @@ if st.session_state["role"] == "crew":
     
     st.divider()
     
-    tab_plan, tab_kanban, tab_rep = st.tabs(["🗂️ Tablica Kanban", "➕ Zaplanuj Zadanie", "📝 Raport Dnia / Zgłoś"])
-    
+    tab_kanban, tab_plan, tab_rep = st.tabs(["🗂️ Tablica Kanban", "➕ Zaplanuj Zadanie", "📝 Zgłoś / Raport"])
+
     with tab_kanban:
+        # ===== GANTT CHART =====
+        all_tasks_gantt = supabase.table("tasks").select(
+            "id,name,kanban_status,planned_start_date,planned_end_date,is_blocked"
+        ).order("planned_start_date").execute().data or []
+
+        if all_tasks_gantt:
+            with st.expander("📅 Mój Harmonogram", expanded=True):
+                GANTT_COLORS = {
+                    "BACKLOG":             "#4a5568",
+                    "READY":               "#2b6cb0",
+                    "IN_PROGRESS":         "#c05621",
+                    "AWAITING_INSPECTION": "#744210",
+                    "COMPLETED":           "#276749",
+                }
+                fig = go.Figure()
+                today_str = date.today().isoformat()
+
+                for task in all_tasks_gantt:
+                    s_date = task.get("planned_start_date") or today_str
+                    e_date = task.get("planned_end_date") or today_str
+                    if s_date == e_date:  # min 1 day width
+                        from datetime import datetime as dt
+                        e_date = (dt.strptime(e_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                    status = task.get("kanban_status") or "BACKLOG"
+                    color = "#e53e3e" if task.get("is_blocked") else GANTT_COLORS.get(status, "#4a5568")
+                    label = task["name"]
+                    if task.get("is_blocked"): label += " 🔴"
+                    hover = (
+                        f"<b>{task['name']}</b><br>"
+                        f"Status: {status}<br>"
+                        f"Start: {task.get('planned_start_date','?')}<br>"
+                        f"Koniec: {task.get('planned_end_date','?')}"
+                    )
+                    fig.add_trace(go.Bar(
+                        name=task["name"],
+                        y=[label],
+                        x=[(dt.strptime(e_date, "%Y-%m-%d") - dt.strptime(s_date, "%Y-%m-%d")).days],
+                        base=[s_date],
+                        orientation="h",
+                        marker=dict(color=color, line=dict(color="#1a1f2e", width=1)),
+                        hovertemplate=hover + "<extra></extra>",
+                        showlegend=False,
+                    ))
+
+                # Linia DZISIAJ
+                fig.add_vline(
+                    x=today_str, line_width=2, line_dash="dash",
+                    line_color="#fc8181",
+                    annotation_text="DZISIAJ",
+                    annotation_font_color="#fc8181",
+                    annotation_position="top",
+                )
+
+                fig.update_layout(
+                    barmode="overlay",
+                    height=max(120, len(all_tasks_gantt) * 48),
+                    paper_bgcolor="#1a1f2e",
+                    plot_bgcolor="#1a1f2e",
+                    font=dict(color="#e2e8f0", family="Inter"),
+                    xaxis=dict(
+                        type="date",
+                        gridcolor="#2d3748",
+                        tickformat="%d %b",
+                        color="#a0aec0",
+                    ),
+                    yaxis=dict(gridcolor="#2d3748", color="#a0aec0"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+                # Legenda
+                st.markdown("""
+                <div style="display:flex;gap:16px;font-size:12px;color:#a0aec0;flex-wrap:wrap;margin-top:4px">
+                <span style="color:#4a5568">&#9632; Do Zrobienia</span>
+                <span style="color:#c05621">&#9632; W Trakcie</span>
+                <span style="color:#744210">&#9632; Do Odbioru</span>
+                <span style="color:#276749">&#9632; Zamkni&#x0119;te</span>
+                <span style="color:#e53e3e">&#9632; Zablokowane</span>
+                </div>""", unsafe_allow_html=True)
+
         kanban = get_kanban_board()
         c1, c2, c3, c4 = st.columns(4)
-        
+
         with c1:
             st.markdown("### 📦 DO ZROBIENIA")
             for task in kanban.get('BACKLOG', []) + kanban.get('READY', []):
