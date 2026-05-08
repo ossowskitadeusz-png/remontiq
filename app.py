@@ -676,9 +676,16 @@ def delete_comment(comment_id):
         return True
     except Exception: return False
 
+@st.fragment(run_every=7)
 def render_whatsapp_chat(comments, current_user, task_id, context="chat"):
-    """WhatsApp-style chat z edycją i usuwaniem."""
-    for idx, c in enumerate(comments):
+    """WhatsApp-style chat z edycją, usuwaniem i auto-odświeżaniem fragmentu."""
+    # Odświeżamy komentarze bezpośrednio wewnątrz fragmentu
+    all_grouped = get_all_comments_grouped()
+    task_data = next((g for g in all_grouped if g['task_id'] == task_id), None)
+    current_comments = task_data['comments'] if task_data else comments
+    
+    st.caption("⏱️ Czat odświeża się automatycznie co 7s")
+    for idx, c in enumerate(current_comments):
         if c.get('is_deleted'): continue
         author = c.get('author_name', 'Nieznany')
         is_me = (author == current_user)
@@ -954,7 +961,7 @@ if st.session_state["role"] is None:
     with col2:
         with st.form("login_form"):
             pin = st.text_input("PIN", type="password", placeholder="Wpisz 4-cyfrowy PIN")
-            if st.form_submit_button("Zaloguj", use_container_width=True, type="primary"):
+            if st.form_submit_button("Zaloguj", width="stretch", type="primary"):
                 inv_pin = st.secrets.get("auth", {}).get("investor_pin", "9999")
                 crw_pin = st.secrets.get("auth", {}).get("crew_pin", "1234")
                 if pin == str(inv_pin):
@@ -1128,7 +1135,7 @@ if st.session_state["role"] == "crew":
                     yaxis=dict(gridcolor="#2d3748", color="#a0aec0"),
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
                 # Legenda
                 st.markdown("""
@@ -1150,7 +1157,7 @@ if st.session_state["role"] == "crew":
                     st.markdown(f"**{task['name']}**")
                     st.caption(f"Start: {task['planned_start_date']}")
                     render_comment_section(task['id'], "crew")
-                    if st.button("▶️ ROZPOCZNIJ", key=f"start_{task['id']}", use_container_width=True):
+                    if st.button("▶️ ROZPOCZNIJ", key=f"start_{task['id']}", width="stretch"):
                         start_task(task['id'])
                         st.rerun()
 
@@ -1166,7 +1173,7 @@ if st.session_state["role"] == "crew":
                     if blocked:
                         st.warning(f"⛔ {task.get('blocker_reason')}")
                     else:
-                        if st.button("🔔 DO ODBIORU", key=f"inspect_{task['id']}", use_container_width=True, type="primary"):
+                        if st.button("🔔 DO ODBIORU", key=f"inspect_{task['id']}", width="stretch", type="primary"):
                             submit_for_inspection(task['id'])
                             st.rerun()
                         
@@ -1263,18 +1270,7 @@ if st.session_state["role"] == "crew":
 
     with tab_comm:
         st.title("💬 Centrum Komunikacji")
-        
-        # --- REAL-TIME POLLING (Sprint 14) ---
         sel_chat = st.session_state.get("selected_chat_crew", "GLOBAL")
-        if sel_chat != "GLOBAL":
-            ref_status = st.empty()
-            if should_refresh_comments(sel_chat, interval=7):
-                ref_status.info("🔄 Synchronizacja...")
-                time.sleep(0.5)
-                st.rerun()
-            else:
-                elapsed = (datetime.now() - LAST_SYNC_TIME.get(sel_chat, datetime.now())).total_seconds()
-                ref_status.caption(f"⏱️ Odświeżanie za {int(7 - elapsed)}s")
 
         all_comments_grouped = get_all_comments_grouped()
         if not all_comments_grouped:
@@ -1283,12 +1279,12 @@ if st.session_state["role"] == "crew":
             col_side, col_chat = st.columns([2, 4])
             with col_side:
                 st.markdown("### 📋 Zadania")
-                if st.button("🌍 Wszystkie wiadomości", use_container_width=True, key="crew_global"):
+                if st.button("🌍 Wszystkie wiadomości", width="stretch", key="crew_global"):
                     st.session_state.selected_chat_crew = "GLOBAL"
                 st.divider()
                 for group in all_comments_grouped:
                     count = len([c for c in group['comments'] if not c.get('is_deleted')])
-                    if st.button(f"📌 {group['task_name']} ({count})", use_container_width=True, key=f"crew_chat_{group['task_id']}"):
+                    if st.button(f"📌 {group['task_name']} ({count})", width="stretch", key=f"crew_chat_{group['task_id']}"):
                         st.session_state.selected_chat_crew = group['task_id']
             
             with col_chat:
@@ -1420,7 +1416,7 @@ if menu == "0. Charter Projektu":
             st.subheader("⚡ Warunki specjalne")
             conditions = st.text_area("Warunki specjalne (opcjonalnie)", height=80)
             
-            if st.form_submit_button("🚀 UTWÓRZ CHARTER PROJEKTU", use_container_width=True, type="primary"):
+            if st.form_submit_button("🚀 UTWÓRZ CHARTER PROJEKTU", width="stretch", type="primary"):
                 if not project_name or not investor_name or not scope or not start_date or not end_date:
                     st.error("❌ Uzupełnij pola oznaczone *")
                 elif end_date <= start_date:
@@ -1462,7 +1458,7 @@ if menu == "0. Charter Projektu":
         fig.update_xaxes(title_text="Dni")
         fig.update_yaxes(showticklabels=False)
         fig.update_layout(height=150, showlegend=False, margin=dict(l=20, r=20, t=20, b=20))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         st.divider()
         st.subheader("📍 Status i kontrola")
@@ -1471,7 +1467,7 @@ if menu == "0. Charter Projektu":
         if project_meta['status'] == "PLANNING":
             st.warning("🟡 **Status: PLANOWANIE**")
             st.info("✅ **Checklist przed aktywacją:**\n- [ ] Materiały zamówione\n- [ ] Ekipa potwierdzona\n- [ ] Decyzje podjęte")
-            if st.button("🚀 URUCHOM PROJEKT", use_container_width=True, type="primary"):
+            if st.button("🚀 URUCHOM PROJEKT", width="stretch", type="primary"):
                 update_project_metadata(project_meta['id'], status="ACTIVE", actual_start_date=date.today())
                 st.rerun()
         elif project_meta['status'] == "ACTIVE":
@@ -1483,7 +1479,7 @@ if menu == "0. Charter Projektu":
             if days_info['remaining_days'] < 7: c4.error(f"🚨 {days_info['remaining_days']} dni!")
             else: c4.info("✅ OK")
             st.progress(days_info['progress_pct'] / 100, text=f"Realizacja: {days_info['progress_pct']}%")
-            if st.button("✅ Zakończ projekt", use_container_width=True, type="primary"):
+            if st.button("✅ Zakończ projekt", width="stretch", type="primary"):
                 update_project_metadata(project_meta['id'], status="COMPLETED", actual_end_date=date.today())
                 st.rerun()
         elif project_meta['status'] == "COMPLETED":
@@ -1586,11 +1582,11 @@ elif menu == "1. Dashboard (Centrum)":
                     st.info(f"📝 Karol: {insp['submission_notes']}")
                 render_comment_section(insp['task_id'], "investor")
                 ba, bb = st.columns(2)
-                if ba.button("✅ ZATWIERDŹ", key=f"cc_appr_{insp['id']}", use_container_width=True, type="primary"):
+                if ba.button("✅ ZATWIERDŹ", key=f"cc_appr_{insp['id']}", width="stretch", type="primary"):
                     approve_inspection(insp["id"])
                     st.success("✅ Zatwierdzone! Karol widzi to na tablicy.")
                     st.rerun()
-                if bb.button("❌ WYMAGA POPRAWEK", key=f"cc_rwrk_{insp['id']}", use_container_width=True):
+                if bb.button("❌ WYMAGA POPRAWEK", key=f"cc_rwrk_{insp['id']}", width="stretch"):
                     st.session_state[f"rework_{insp['id']}"] = True
                 if st.session_state.get(f"rework_{insp['id']}"):
                     rw = st.text_area("Opisz co poprawić", key=f"rw_txt_{insp['id']}")
@@ -1619,7 +1615,7 @@ elif menu == "1. Dashboard (Centrum)":
                     for b in blks:
                         col_b1, col_b2 = st.columns([3, 1])
                         col_b1.write(f"• {b['description']}")
-                        if col_b2.button("✅ ODBLOKUJ", key=f"res_{b['id']}", use_container_width=True):
+                        if col_b2.button("✅ ODBLOKUJ", key=f"res_{b['id']}", width="stretch"):
                             resolve_blocker(b['id'], "Rozwiązane przez Inwestora w Command Center")
                             st.rerun()
                 
@@ -1652,10 +1648,10 @@ elif menu == "1. Dashboard (Centrum)":
                     note_val = fn1.text_input("Twoja notatka", placeholder="np. Zamówiłem, dostawa w czwartek", key=f"cc_note_{req['id']}")
                     del_date = fn2.date_input("Dostawa", key=f"cc_ddate_{req['id']}")
                     fa, fb = st.columns(2)
-                    if fa.form_submit_button("✅ POTWIERDŹ", use_container_width=True, type="primary"):
+                    if fa.form_submit_button("✅ POTWIERDŹ", width="stretch", type="primary"):
                         confirm_crew_request(req["id"], note_val, del_date)
                         st.rerun()
-                    if fb.form_submit_button("❌ ANULUJ", use_container_width=True):
+                    if fb.form_submit_button("❌ ANULUJ", width="stretch"):
                         cancel_crew_request(req["id"])
                         st.rerun()
         st.divider()
@@ -1679,18 +1675,7 @@ elif menu == "1. Dashboard (Centrum)":
 
 elif menu == "1a. Centrum Komunikacji":
     st.title("💬 Centrum Komunikacji")
-    
-    # --- REAL-TIME POLLING (Sprint 14) ---
     sel_chat = st.session_state.get("selected_chat", "GLOBAL")
-    if sel_chat != "GLOBAL":
-        ref_status = st.empty()
-        if should_refresh_comments(sel_chat, interval=7):
-            ref_status.info("🔄 Synchronizacja...")
-            time.sleep(0.5)
-            st.rerun()
-        else:
-            elapsed = (datetime.now() - LAST_SYNC_TIME.get(sel_chat, datetime.now())).total_seconds()
-            ref_status.caption(f"⏱️ Odświeżanie za {int(7 - elapsed)}s")
 
     all_comments_grouped = get_all_comments_grouped()
     if not all_comments_grouped:
@@ -1699,12 +1684,12 @@ elif menu == "1a. Centrum Komunikacji":
         col_side, col_chat = st.columns([2, 4])
         with col_side:
             st.markdown("### 📋 Zadania")
-            if st.button("🌍 Wszystkie wiadomości", use_container_width=True, key="inv_global"):
+            if st.button("🌍 Wszystkie wiadomości", width="stretch", key="inv_global"):
                 st.session_state.selected_chat = "GLOBAL"
             st.divider()
             for group in all_comments_grouped:
                 count = len([c for c in group['comments'] if not c.get('is_deleted')])
-                if st.button(f"📌 {group['task_name']} ({count})", use_container_width=True, key=f"inv_chat_{group['task_id']}"):
+                if st.button(f"📌 {group['task_name']} ({count})", width="stretch", key=f"inv_chat_{group['task_id']}"):
                     st.session_state.selected_chat = group['task_id']
         
         with col_chat:
@@ -1769,7 +1754,7 @@ elif menu == "3. Materiały i sprzęty":
         edited_mats = st.data_editor(
             df_mats, 
             disabled=["id", "name", "cost_actual", "quantity_received", "quantity_planned", "unit"], 
-            use_container_width=True, hide_index=True, key="mat_editor"
+            width="stretch", hide_index=True, key="mat_editor"
         )
         if st.button("💾 Zapisz zmiany w materiałach"):
             for _, row in edited_mats.iterrows():
@@ -1842,7 +1827,7 @@ elif menu == "6. Wydatki (Finanse)":
         fig.add_trace(go.Scatter(x=bd['dates'], y=bd['planned'], name="Plan", line=dict(color="#2b6cb0", dash="dash")))
         fig.add_trace(go.Scatter(x=bd['dates'], y=bd['actual'], name="Realizacja", fill="tozeroy", line=dict(color="#48bb78")))
         fig.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), margin=dict(l=0,r=0,t=20,b=0))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     df_exp = read_table("expenses")
     if not df_exp.empty:
@@ -1854,7 +1839,7 @@ elif menu == "6. Wydatki (Finanse)":
             
         view_df = df_exp[['id', 'date', 'description', 'amount', 'quantity', 'Material']].copy()
         view_df.rename(columns={"date": "Data", "description": "Opis", "amount": "Kwota", "quantity": "Ilość"}, inplace=True)
-        st.dataframe(view_df, use_container_width=True, hide_index=True)
+        st.dataframe(view_df, width="stretch", hide_index=True)
         
         with st.expander("🗑️ Anuluj wydatek (Cofnij sync)"):
             del_exp_id = st.selectbox("Wybierz wydatek", view_df['id'].tolist(), format_func=lambda x: f"[{x[:4]}] {view_df[view_df['id']==x]['Opis'].iloc[0]} - {view_df[view_df['id']==x]['Kwota'].iloc[0]} zł")
@@ -1942,7 +1927,7 @@ elif menu == "4a. Odbiór Prac":
                 col_approve, col_rework = st.columns(2)
                 with col_approve:
                     approve_note = st.text_input("Komentarz przy zatwierdzeniu (opcjonalnie)", key=f"approve_note_{inspection['id']}")
-                    if st.button("✅ ZATWIERDŹ PRACE", key=f"approve_{inspection['id']}", use_container_width=True, type="primary"):
+                    if st.button("✅ ZATWIERDŹ PRACE", key=f"approve_{inspection['id']}", width="stretch", type="primary"):
                         result = approve_inspection(inspection['id'], approve_note)
                         if result['status'] == 'ok':
                             st.success(f"✅ Zadanie \"{task.get('name')}\" zatwierdzone! Karol zobaczy to na swojej tablicy.")
@@ -1950,7 +1935,7 @@ elif menu == "4a. Odbiór Prac":
 
                 with col_rework:
                     rework_desc = st.text_area("Opisz co wymaga poprawek *", key=f"rework_desc_{inspection['id']}", placeholder="np. Poprawić kąt nachylenia przy wannie")
-                    if st.button("❌ WYMAGA POPRAWEK", key=f"rework_{inspection['id']}", use_container_width=True):
+                    if st.button("❌ WYMAGA POPRAWEK", key=f"rework_{inspection['id']}", width="stretch"):
                         if not rework_desc.strip():
                             st.error("Musisz opisać co wymaga poprawek!")
                         else:
@@ -2009,10 +1994,10 @@ elif menu == "5. Ekipa":
                         note = st.text_input("Twoja notatka (opcjonalnie)", placeholder="np. Zamówiłem, dostawa czwartek", key=f"note_{req['id']}")
                         delivery = st.date_input("Szacowana dostawa", key=f"del_{req['id']}")
                         c1, c2 = st.columns(2)
-                        if c1.form_submit_button("✅ POTWIERDŹ", use_container_width=True, type="primary"):
+                        if c1.form_submit_button("✅ POTWIERDŹ", width="stretch", type="primary"):
                             confirm_crew_request(req['id'], note, delivery)
                             st.rerun()
-                        if c2.form_submit_button("❌ ANULUJ", use_container_width=True):
+                        if c2.form_submit_button("❌ ANULUJ", width="stretch"):
                             cancel_crew_request(req['id'])
                             st.rerun()
     else:
@@ -2032,7 +2017,7 @@ elif menu == "5. Ekipa":
                     if req.get("expected_delivery_date"):
                         st.caption(f"📅 Szacowana dostawa: {req['expected_delivery_date']}")
                 with col_btn:
-                    if st.button("📦 DOSTARCZONE", key=f"del_btn_{req['id']}", use_container_width=True, type="primary"):
+                    if st.button("📦 DOSTARCZONE", key=f"del_btn_{req['id']}", width="stretch", type="primary"):
                         mark_crew_request_delivered(req['id'])
                         st.rerun()
 
@@ -2072,7 +2057,7 @@ elif menu == "7. Decyzje":
                 
     df_dec = read_table("decisions", select="id, title, impact, status, due_date, decision_result")
     if not df_dec.empty:
-        edited_dec = st.data_editor(df_dec, disabled=["id", "title", "due_date"], hide_index=True, use_container_width=True)
+        edited_dec = st.data_editor(df_dec, disabled=["id", "title", "due_date"], hide_index=True, width="stretch")
         if st.button("💾 Zapisz zmiany w decyzjach"):
             for _, row in edited_dec.iterrows():
                 supabase.table("decisions").update({
@@ -2103,7 +2088,7 @@ elif menu == "8. Ryzyka":
 
     df_iss = read_table("issues", select="id, title, severity, status")
     if not df_iss.empty:
-        edited_iss = st.data_editor(df_iss, disabled=["id", "title"], hide_index=True, use_container_width=True)
+        edited_iss = st.data_editor(df_iss, disabled=["id", "title"], hide_index=True, width="stretch")
         if st.button("💾 Zapisz edycję"):
             for _, row in edited_iss.iterrows():
                 supabase.table("issues").update({"status": row['status'], "severity": row['severity']}).eq("id", row['id']).execute()
