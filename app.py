@@ -638,8 +638,7 @@ if st.session_state["role"] == "crew":
                     s_date = task.get("planned_start_date") or today_str
                     e_date = task.get("planned_end_date") or today_str
                     if s_date == e_date:  # min 1 day width
-                        from datetime import datetime as dt
-                        e_date = (dt.strptime(e_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                        e_date = (datetime.strptime(e_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
                     status = task.get("kanban_status") or "BACKLOG"
                     color = "#e53e3e" if task.get("is_blocked") else GANTT_COLORS.get(status, "#4a5568")
                     label = task["name"]
@@ -653,7 +652,7 @@ if st.session_state["role"] == "crew":
                     fig.add_trace(go.Bar(
                         name=task["name"],
                         y=[label],
-                        x=[(dt.strptime(e_date, "%Y-%m-%d") - dt.strptime(s_date, "%Y-%m-%d")).days],
+                        x=[(datetime.strptime(e_date, "%Y-%m-%d") - datetime.strptime(s_date, "%Y-%m-%d")).days],
                         base=[s_date],
                         orientation="h",
                         marker=dict(color=color, line=dict(color="#1a1f2e", width=1)),
