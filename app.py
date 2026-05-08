@@ -375,11 +375,18 @@ def render_comment_section(task_id, role):
             with st.chat_message("assistant" if c['author_role'] == 'investor' else "user"):
                 st.write(f"**{c['author_name']}** ({str(c['created_at'])[11:16]})")
                 st.write(c['content'])
+                if c.get('image_url'):
+                    st.image(c['image_url'], use_container_width=True)
         
         with st.form(f"comment_form_{task_id}", clear_on_submit=True):
             new_c = st.text_input("Napisz wiadomość...", key=f"input_{task_id}")
+            up_file = st.file_uploader("Dodaj zdjęcie", type=["jpg", "jpeg", "png"], key=f"file_{task_id}")
             if st.form_submit_button("Wyślij"):
-                add_comment(task_id, user_name, role, new_c)
+                img_url = None
+                if up_file:
+                    res = upload_task_photo(task_id, up_file)
+                    if res['success']: img_url = res['url']
+                add_comment_with_photo(task_id, user_name, role, new_c, img_url)
                 st.rerun()
 
 def calculate_budget_forecast():
@@ -525,6 +532,51 @@ EVENT_ICONS = {
     "task_completed":         ("✅", "investor"),
     "comment_added":          ("💬", "both"),
 }
+
+# ============================================
+# SPRINT 11: PHOTO UPLOAD SYSTEM
+# ============================================
+
+def upload_task_photo(task_id, file):
+    """Uploaduje zdjęcie do Supabase Storage (task_photos)."""
+    try:
+        # Walidacja rozmiaru (max 5 MB)
+        if len(file.getvalue()) > 5 * 1024 * 1024:
+            return {"success": False, "error": "Plik zbyt duży. Max 5 MB."}
+        
+        # Ścieżka: task_photos/task_{id}/{timestamp}_{name}
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        f_path = f"task_{task_id}/{ts}_{file.name}"
+        
+        # Upload
+        supabase.storage.from_("task_photos").upload(
+            file=file.getvalue(), path=f_path, file_options={"content-type": file.type}
+        )
+        
+        # Public URL
+        url = supabase.storage.from_("task_photos").get_public_url(f_path)
+        return {"success": True, "url": url["publicUrl"]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def add_comment_with_photo(task_id, author_name, author_role, content, image_url=None):
+    """Dodaje komentarz z opcjonalnym linkiem do zdjęcia."""
+    try:
+        supabase.table("task_comments").insert({
+            "task_id": task_id, "author_name": author_name, "author_role": author_role,
+            "content": content, "image_url": image_url
+        }).execute()
+        
+        log_activity(author_name, "comment_added", task_id, 
+                     f"Dodano komentarz" + (" ze zdjęciem" if image_url else ""))
+        return True
+    except Exception: return False
+
+def get_comments_with_photos(task_id):
+    """Pobiera wszystkie komentarze dla zadania."""
+    try:
+        return supabase.table("task_comments").select("*").eq("task_id", str(task_id)).order("created_at", desc=False).execute().data or []
+    except Exception: return []
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -1072,12 +1124,28 @@ if st.session_state["role"] == "crew":
                         auth_icon = "🔵" if c['author_role'] == 'investor' else "🟡"
                         st.markdown(f"{auth_icon} **{c['author_name']}** | {c['task_name']} | <span style='color:grey'>{c['created_at'][11:16]}</span>", unsafe_allow_html=True)
                         st.write(f"> {c['content']}")
+                        if c.get('image_url'):
+                            with st.expander("📸 Zobacz zdjęcie"):
+                                st.image(c['image_url'], use_container_width=True)
                     with jump_col:
                         if st.button("👁️ POKAŻ", key=f"jump_{c['id']}"):
                             st.session_state.jump_to_task_id = c['task_id']
-                            # Przełączamy na tablicę Kanban (tab_kanban to index 0)
-                            # W Streamlit nie ma prostego switcha tabów, ale możemy dać info
                             st.info(f"Zadanie '{c['task_name']}' podświetlone na Kanbanie!")
+                        if st.button("↩️ ODPOWIEDZ", key=f"rep_{c['id']}"):
+                            st.session_state.reply_to_comment_id = c['id']
+                    
+                    if st.session_state.get("reply_to_comment_id") == c['id']:
+                        with st.form(f"rep_form_{c['id']}", clear_on_submit=True):
+                            rep_txt = st.text_area("Twoja wiadomość")
+                            rep_img = st.file_uploader("Załącz zdjęcie", type=["jpg", "png"], key=f"rep_img_{c['id']}")
+                            if st.form_submit_button("Wyślij odpowiedź"):
+                                url = None
+                                if rep_img:
+                                    res = upload_task_photo(c['task_id'], rep_img)
+                                    if res['success']: url = res['url']
+                                add_comment_with_photo(c['task_id'], "Karol", "crew", rep_txt, url)
+                                st.session_state.reply_to_comment_id = None
+                                st.rerun()
 
     with tab_rep:
         st.subheader("📝 Zgłoś potrzebę / brak materiału")
