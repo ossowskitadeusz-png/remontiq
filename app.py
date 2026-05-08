@@ -119,13 +119,17 @@ def update_kanban_status(task_id, new_status):
     return {"status": "ok"}
 
 def start_task(task_id):
+    task_name = (supabase.table("tasks").select("name").eq("id", task_id).execute().data or [{}])[0].get("name", "?")
     supabase.table("tasks").update({"kanban_status": "IN_PROGRESS", "actual_start_date": datetime.now().isoformat()}).eq("id", task_id).execute()
+    log_activity("task_started", f"Karol rozpoczął: {task_name}", "Karol", "investor", task_id)
     return {"status": "ok"}
 
 def submit_for_inspection(task_id, notes="", photos=None):
+    task_name = (supabase.table("tasks").select("name").eq("id", task_id).execute().data or [{}])[0].get("name", "?")
     inspection_data = {"task_id": task_id, "submitted_by": "Karol", "submitted_at": datetime.now().isoformat(), "submission_notes": notes, "submission_photos": photos or [], "inspection_status": "PENDING"}
     response = supabase.table("task_inspection").insert(inspection_data).execute()
     supabase.table("tasks").update({"kanban_status": "AWAITING_INSPECTION"}).eq("id", task_id).execute()
+    log_activity("inspection_submitted", f"Karol zgłosił do odbioru: {task_name}", "Karol", "investor", task_id)
     return {"status": "ok", "inspection_id": response.data[0]['id'] if response.data else None}
 
 def report_blocker(task_id, blocker_type, description, priority=3):
@@ -158,16 +162,20 @@ def approve_inspection(inspection_id, notes=""):
     response = supabase.table("task_inspection").select("task_id").eq("id", inspection_id).execute()
     if not response.data: return {"status": "error"}
     task_id = response.data[0]['task_id']
+    task_name = (supabase.table("tasks").select("name").eq("id", task_id).execute().data or [{}])[0].get("name", "?")
     supabase.table("task_inspection").update({"inspection_status": "APPROVED", "inspected_by": "Inwestor", "inspected_at": datetime.now().isoformat(), "inspection_notes": notes}).eq("id", inspection_id).execute()
     supabase.table("tasks").update({"kanban_status": "COMPLETED", "status": "Done", "actual_end_date": datetime.now().isoformat(), "progress_percent": 100}).eq("id", task_id).execute()
+    log_activity("task_completed", f"Inwestor zatwierdził: {task_name}", "Inwestor", "crew", task_id)
     return {"status": "ok"}
 
 def request_rework(inspection_id, rework_description):
     response = supabase.table("task_inspection").select("task_id").eq("id", inspection_id).execute()
     if not response.data: return {"status": "error"}
     task_id = response.data[0]['task_id']
+    task_name = (supabase.table("tasks").select("name").eq("id", task_id).execute().data or [{}])[0].get("name", "?")
     supabase.table("task_inspection").update({"inspection_status": "REQUIRES_REWORK", "inspected_by": "Inwestor", "inspected_at": datetime.now().isoformat(), "rework_description": rework_description}).eq("id", inspection_id).execute()
     supabase.table("tasks").update({"kanban_status": "IN_PROGRESS"}).eq("id", task_id).execute()
+    log_activity("inspection_rework", f"Wymaga poprawek: {task_name} — {rework_description[:60]}", "Inwestor", "crew", task_id)
     return {"status": "ok"}
 
 def get_crew_kpis():
@@ -249,6 +257,49 @@ def submit_crew_request_with_blocker(title, needed_by, is_blocker, linked_task_i
         supabase.table("task_blockers").insert({"task_id": linked_task_id, "blocker_type": "MISSING_MATERIAL", "description": f"Zgłoszono brak: {title}", "reported_by": "Karol", "is_resolved": False}).execute()
     return {"status": "ok"}
 
+
+def log_activity(event_type, description, created_by, visible_to="both", task_id=None):
+    """Zapisz zdarzenie do activity_log — pojawi się w banerze alertów."""
+    try:
+        payload = {
+            "event_type": event_type,
+            "description": description,
+            "created_by": created_by,
+            "visible_to": visible_to,
+        }
+        if task_id:
+            payload["task_id"] = str(task_id)
+        supabase.table("activity_log").insert(payload).execute()
+    except Exception:
+        pass  # Logowanie nie może crashować aplikacji
+
+def get_activity_banner(role):
+    """Pobierz zdarzenia od ostatniej wizyty dla danej roli."""
+    try:
+        last_visit = st.session_state.get("last_visit")
+        query = supabase.table("activity_log").select("*").order("created_at", desc=True).limit(10)
+        if role == "investor":
+            query = query.in_("visible_to", ["investor", "both"])
+        else:
+            query = query.in_("visible_to", ["crew", "both"])
+        events = query.execute().data or []
+        if last_visit:
+            events = [e for e in events if e["created_at"] > last_visit]
+        return events
+    except Exception:
+        return []
+
+EVENT_ICONS = {
+    "task_started":           ("🟧", "crew"),
+    "inspection_submitted":   ("🔔", "investor"),
+    "inspection_approved":    ("✅", "crew"),
+    "inspection_rework":      ("❌", "crew"),
+    "blocker_reported":       ("🔴", "investor"),
+    "request_confirmed":      ("🟡", "crew"),
+    "request_delivered":      ("📦", "crew"),
+    "request_cancelled":      ("⬜", "crew"),
+    "task_completed":         ("✅", "investor"),
+}
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -332,6 +383,130 @@ def calculate_smart_recommendations():
 # ==========================================
 st.set_page_config(page_title="RemontIQ Cloud", layout="wide", initial_sidebar_state="expanded")
 
+# ==========================================
+# DARK MODE CSS — Sprint 7
+# ==========================================
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+/* === DARK BACKGROUND === */
+.stApp {
+    background: linear-gradient(135deg, #0f1117 0%, #1a1f2e 100%);
+    color: #e2e8f0;
+}
+
+/* === SIDEBAR === */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1a1f2e 0%, #141824 100%);
+    border-right: 1px solid #2d3748;
+}
+[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+
+/* === CARDS / CONTAINERS === */
+[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] > div[data-testid="element-container"] > div[data-baseweb] {
+    background: #1e2533;
+    border: 1px solid #2d3748;
+    border-radius: 12px;
+}
+
+/* === METRICS === */
+[data-testid="metric-container"] {
+    background: #1e2533;
+    border: 1px solid #2d3748;
+    border-radius: 10px;
+    padding: 12px 16px;
+}
+[data-testid="stMetricValue"] { color: #63b3ed !important; font-weight: 700; }
+[data-testid="stMetricDelta"] { font-size: 12px !important; }
+
+/* === BUTTONS === */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    border: 1px solid #4a5568;
+    background: #2d3748;
+    color: #e2e8f0;
+}
+.stButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(99, 179, 237, 0.3);
+    border-color: #63b3ed;
+    background: #374151;
+}
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #2b6cb0, #3182ce);
+    border-color: #3182ce;
+    color: white;
+}
+.stButton > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #3182ce, #4299e1);
+    box-shadow: 0 4px 16px rgba(49, 130, 206, 0.5);
+}
+
+/* === INPUTS === */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea,
+.stSelectbox > div > div > div {
+    background: #1a1f2e !important;
+    color: #e2e8f0 !important;
+    border: 1px solid #4a5568 !important;
+    border-radius: 8px !important;
+}
+
+/* === ALARM PULSE ANIMATION === */
+@keyframes pulse-red {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(229, 62, 62, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(229, 62, 62, 0); }
+}
+.alarm-pulse {
+    animation: pulse-red 2s infinite;
+    border-radius: 10px;
+}
+
+/* === KANBAN COLUMN HEADERS === */
+h3 { color: #90cdf4 !important; border-bottom: 2px solid #2d3748; padding-bottom: 8px; }
+
+/* === DIVIDER === */
+hr { border-color: #2d3748 !important; margin: 20px 0 !important; }
+
+/* === TABS === */
+[data-baseweb="tab-list"] { background: #1e2533 !important; border-radius: 10px; }
+[data-baseweb="tab"] { color: #a0aec0 !important; }
+[aria-selected="true"] { color: #63b3ed !important; background: #2d3748 !important; border-radius: 8px; }
+
+/* === EXPANDER === */
+[data-testid="stExpander"] {
+    background: #1e2533;
+    border: 1px solid #2d3748;
+    border-radius: 10px;
+}
+
+/* === SUCCESS / WARNING / ERROR === */
+[data-testid="stAlert"] { border-radius: 8px !important; }
+
+/* === ACTIVITY BANNER === */
+.activity-banner {
+    background: linear-gradient(135deg, #1a2744, #1e3a5f);
+    border: 1px solid #2b6cb0;
+    border-left: 4px solid #63b3ed;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+}
+.activity-item {
+    padding: 4px 0;
+    font-size: 13px;
+    color: #bee3f8;
+}
+</style>
+""", unsafe_allow_html=True)
+
 if "role" not in st.session_state:
     st.session_state["role"] = None
 
@@ -341,25 +516,48 @@ def logout():
 
 # --- EKRAN LOGOWANIA ---
 if st.session_state["role"] is None:
-    st.markdown("<h1 style='text-align: center;'>Witamy w Remont IQ</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center;'>Podaj PIN dostępu do aplikacji.</p>", unsafe_allow_html=True)
-    
+    st.markdown("<h1 style='text-align:center;margin-top:80px'>RemontIQ</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:#a0aec0'>Podaj PIN dostępu do aplikacji.</p>", unsafe_allow_html=True)
+
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         with st.form("login_form"):
             pin = st.text_input("PIN", type="password", placeholder="Wpisz 4-cyfrowy PIN")
-            if st.form_submit_button("Zaloguj", use_container_width=True):
+            if st.form_submit_button("Zaloguj", use_container_width=True, type="primary"):
                 inv_pin = st.secrets.get("auth", {}).get("investor_pin", "9999")
                 crw_pin = st.secrets.get("auth", {}).get("crew_pin", "1234")
                 if pin == str(inv_pin):
                     st.session_state["role"] = "investor"
+                    st.session_state["last_visit"] = st.session_state.get("current_visit", None)
+                    st.session_state["current_visit"] = datetime.now().isoformat()
                     st.rerun()
                 elif pin == str(crw_pin):
                     st.session_state["role"] = "crew"
+                    st.session_state["last_visit"] = st.session_state.get("current_visit", None)
+                    st.session_state["current_visit"] = datetime.now().isoformat()
                     st.rerun()
                 else:
                     st.error("Nieprawidłowy PIN!")
     st.stop()
+
+def render_activity_banner(role):
+    """Pokaż baner z nowymi zdarzeniami od ostatniej wizyty."""
+    events = get_activity_banner(role)
+    if not events:
+        return
+    items_html = ""
+    for e in events[:5]:
+        icon = EVENT_ICONS.get(e["event_type"], ("\u2139\ufe0f", "both"))[0]
+        ts = str(e.get("created_at", ""))[:16].replace("T", " ")
+        items_html += f'<div class="activity-item">{icon} {e["description"]} <span style="color:#718096;font-size:11px">({ts})</span></div>'
+    st.markdown(f"""
+    <div class="activity-banner">
+        <div style="font-weight:700;color:#90cdf4;margin-bottom:6px">
+            🔔 Nowe zdarzenia od ostatniej wizyty ({len(events)})
+        </div>
+        {items_html}
+    </div>""", unsafe_allow_html=True)
+
 
 
 # ==========================================
@@ -367,9 +565,11 @@ if st.session_state["role"] is None:
 # ==========================================
 if st.session_state["role"] == "crew":
     c1, c2 = st.columns([4, 1])
-    c1.title("👷 Dashboard Ekipy")
+    c1.title("\U0001f477 Dashboard Ekipy")
     if c2.button("Wyloguj"): logout()
-    
+
+    render_activity_banner("crew")
+
     from motywacja import get_daily_message, get_bonus_meme
     import random
     
@@ -526,9 +726,11 @@ if st.session_state["role"] == "crew":
 # ==========================================
 # WIDOK INWESTORA
 # ==========================================
-st.sidebar.markdown("### 👤 Zalogowano jako: Inwestor")
+st.sidebar.markdown("### Zalogowano jako: Inwestor")
 if st.sidebar.button("Wyloguj"): logout()
 st.sidebar.divider()
+
+render_activity_banner("investor")
 
 project_meta = get_project_metadata()
 if project_meta:
