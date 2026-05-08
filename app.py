@@ -1049,6 +1049,8 @@ if st.session_state["role"] == "crew":
 <style>
     .kpi-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 20px; color: white; text-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.1); font-weight: bold; }
     .blocker-badge { background: #ff6b6b; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+    .log-decision { background: #2b6cb0; color: white; padding: 10px; border-radius: 8px; margin-bottom: 5px; border-left: 5px solid #90cdf4; }
+    .log-issue { background: #9b2c2c; color: white; padding: 10px; border-radius: 8px; margin-bottom: 5px; border-left: 5px solid #feb2b2; }
 </style>
 """, unsafe_allow_html=True)
     
@@ -1060,6 +1062,28 @@ if st.session_state["role"] == "crew":
     with col3: st.metric("🔔 Do Odbioru", kpis['awaiting_inspection'])
     with col4: st.metric("✅ Ukończone", kpis['completed'])
     with col5: st.metric("⏳ Dni do Końca", kpis['days_to_end'])
+    
+    st.divider()
+    
+    # --- PROJEKT LOGS DLA EKIPY ---
+    st.subheader("🔔 Decyzje i Problemy")
+    try:
+        active_logs = supabase.table("project_logs").select("*").neq("status", "RESOLVED").neq("status", "DONE").order("created_at", desc=True).limit(5).execute().data or []
+        if active_logs:
+            for l in active_logs:
+                cls = "log-decision" if l['type'] == "DECISION" else "log-issue"
+                label = "💡 DECYZJA" if l['type'] == "DECISION" else "🚨 PROBLEM"
+                st.markdown(f"""
+                <div class="{cls}">
+                    <div style="font-size:10px; font-weight:bold; opacity:0.8;">{label} | {l.get('due_date') or ''}</div>
+                    <div style="font-size:14px;">{l['title']}</div>
+                    <div style="font-size:11px; font-style:italic; opacity:0.9;">Wynik: {l.get('result') or 'Oczekiwanie...'}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.success("✅ Brak aktywnych blokad z Dziennika.")
+    except Exception:
+        st.info("Dziennik jest pusty.")
     
     st.divider()
     
