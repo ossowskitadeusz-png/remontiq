@@ -132,26 +132,62 @@ def submit_for_inspection(task_id, notes="", photos=None):
     log_activity("inspection_submitted", f"Karol zgłosił do odbioru: {task_name}", "Karol", "investor", task_id)
     return {"status": "ok", "inspection_id": response.data[0]['id'] if response.data else None}
 
-def report_blocker(task_id, blocker_type, description, priority=3):
-    blocker_data = {"task_id": task_id, "blocker_type": blocker_type, "description": description, "reported_by": "Karol", "reported_at": datetime.now().isoformat(), "priority": priority, "is_resolved": False}
-    response = supabase.table("task_blockers").insert(blocker_data).execute()
-    supabase.table("tasks").update({"is_blocked": True, "blocker_reason": description, "blocker_type": blocker_type, "kanban_status": "IN_PROGRESS"}).eq("id", task_id).execute()
-    return {"status": "ok", "blocker_id": response.data[0]['id'] if response.data else None}
+def report_blocker(task_id, description, blocker_type="OTHER"):
+    """Zapisuje powód, status przed blokadą i blokuje zadanie."""
+    try:
+        # Pobierz dane zadania przed blokadą
+        task_data = supabase.table("tasks").select("kanban_status, name").eq("id", task_id).execute().data[0]
+        old_status = task_data['kanban_status']
+        
+        blocker_data = {
+            "task_id": task_id, "blocker_type": blocker_type, "description": description,
+            "reported_by": "Karol", "reported_at": datetime.now().isoformat(), "is_resolved": False
+        }
+        supabase.table("task_blockers").insert(blocker_data).execute()
+        
+        # Zapamiętaj status i zablokuj
+        supabase.table("tasks").update({
+            "is_blocked": True,
+            "blocker_reason": description,
+            "status_before_block": old_status
+        }).eq("id", task_id).execute()
+        
+        log_activity("Karol", "blocker_reported", task_id, f"Blokada: {description}")
+        return True
+    except Exception: return False
+
+def resolve_blocker(blocker_id, resolution_note=""):
+    """Odblokowuje zadanie i PRZYWRACA poprzedni status."""
+    try:
+        resp = supabase.table("task_blockers").select("task_id").eq("id", blocker_id).execute()
+        if not resp.data: return False
+        task_id = resp.data[0]['task_id']
+        
+        # Pobierz status do przywrócenia
+        task_data = supabase.table("tasks").select("status_before_block").eq("id", task_id).execute().data[0]
+        restore_status = task_data.get('status_before_block') or "IN_PROGRESS"
+        
+        supabase.table("task_blockers").update({
+            "is_resolved": True, "resolved_at": datetime.now().isoformat(), "resolution_note": resolution_note
+        }).eq("id", blocker_id).execute()
+        
+        # Sprawdź czy są inne aktywne blokery dla tego zadania
+        remaining = supabase.table("task_blockers").select("id").eq("task_id", task_id).eq("is_resolved", False).execute()
+        if not remaining.data:
+            supabase.table("tasks").update({
+                "is_blocked": False, "blocker_reason": None, 
+                "kanban_status": restore_status, "status_before_block": None
+            }).eq("id", task_id).execute()
+            
+        log_activity("Inwestor", "blocker_resolved", task_id, "Zadanie odblokowane i przywrócone")
+        return True
+    except Exception: return False
 
 def get_blockers_for_task(task_id):
+    """Pobiera aktywne blokery dla zadania."""
     try:
         return supabase.table("task_blockers").select("*").eq("task_id", task_id).eq("is_resolved", False).execute().data or []
     except: return []
-
-def resolve_blocker(blocker_id, resolution_note=""):
-    response = supabase.table("task_blockers").select("task_id").eq("id", blocker_id).execute()
-    if not response.data: return {"status": "error"}
-    task_id = response.data[0]['task_id']
-    supabase.table("task_blockers").update({"is_resolved": True, "resolved_at": datetime.now().isoformat(), "resolution_note": resolution_note}).eq("id", blocker_id).execute()
-    remaining = supabase.table("task_blockers").select("id").eq("task_id", task_id).eq("is_resolved", False).execute()
-    if not remaining.data:
-        supabase.table("tasks").update({"is_blocked": False, "blocker_reason": None, "blocker_type": None}).eq("id", task_id).execute()
-    return {"status": "ok"}
 
 def get_pending_inspections():
     try:
@@ -249,12 +285,24 @@ def cancel_crew_request(request_id):
     return {"status": "ok"}
 
 def submit_crew_request_with_blocker(title, needed_by, is_blocker, linked_task_id=None):
-    """Karol zgłasza potrzebę — jeśli powiązane z zadaniem i jest pilne, auto-blokuje zadanie."""
+    """Karol zgłasza potrzebę — jeśli pilne, auto-blokuje zadanie i zapisuje jego status."""
     payload = {"title": title, "needed_by": str(needed_by), "is_blocker": is_blocker, "status": "Nowe", "linked_task_id": linked_task_id}
     supabase.table("crew_requests").insert(payload).execute()
     if linked_task_id and is_blocker:
-        supabase.table("tasks").update({"is_blocked": True, "blocker_reason": f"Brak: {title}", "blocker_type": "MISSING_MATERIAL"}).eq("id", linked_task_id).execute()
-        supabase.table("task_blockers").insert({"task_id": linked_task_id, "blocker_type": "MISSING_MATERIAL", "description": f"Zgłoszono brak: {title}", "reported_by": "Karol", "is_resolved": False}).execute()
+        # Pobierz obecny status do pamięci
+        t_data = supabase.table("tasks").select("kanban_status").eq("id", linked_task_id).execute().data[0]
+        old_status = t_data['kanban_status']
+        
+        supabase.table("tasks").update({
+            "is_blocked": True, 
+            "blocker_reason": f"Brak: {title}", 
+            "status_before_block": old_status
+        }).eq("id", linked_task_id).execute()
+        
+        supabase.table("task_blockers").insert({
+            "task_id": linked_task_id, "blocker_type": "MISSING_MATERIAL", 
+            "description": f"Zgłoszono brak: {title}", "reported_by": "Karol", "is_resolved": False
+        }).execute()
     return {"status": "ok"}
 
 
@@ -366,28 +414,13 @@ def get_filtered_comments(task_name=None, author_role=None, order="newest_first"
     except Exception: return []
 
 def render_comment_section(task_id, role):
-    """Wyświetla czat wewnątrz expandera."""
+    """Wyświetla czat w stylu WhatsApp."""
     comments = get_comments(task_id)
     user_name = "Karol" if role == "crew" else "Inwestor"
     
-    with st.expander(f"💬 Komentarze ({len(comments)})"):
-        for c in comments:
-            with st.chat_message("assistant" if c['author_role'] == 'investor' else "user"):
-                st.write(f"**{c['author_name']}** ({str(c['created_at'])[11:16]})")
-                st.write(c['content'])
-                if c.get('image_url'):
-                    st.image(c['image_url'], use_container_width=True)
-        
-        with st.form(f"comment_form_{task_id}", clear_on_submit=True):
-            new_c = st.text_input("Napisz wiadomość...", key=f"input_{task_id}")
-            up_file = st.file_uploader("Dodaj zdjęcie", type=["jpg", "jpeg", "png"], key=f"file_{task_id}")
-            if st.form_submit_button("Wyślij"):
-                img_url = None
-                if up_file:
-                    res = upload_task_photo(task_id, up_file)
-                    if res['success']: img_url = res['url']
-                add_comment_with_photo(task_id, user_name, role, new_c, img_url)
-                st.rerun()
+    with st.expander(f"💬 Chat ({len(comments)})"):
+        render_whatsapp_chat(comments, user_name)
+        render_chat_input(task_id, user_name)
 
 def calculate_budget_forecast():
     """Oblicz prognozę wyczerpania budżetu."""
@@ -526,6 +559,7 @@ EVENT_ICONS = {
     "inspection_approved":    ("✅", "crew"),
     "inspection_rework":      ("❌", "crew"),
     "blocker_reported":       ("🔴", "investor"),
+    "blocker_resolved":       ("🟢", "crew"),
     "request_confirmed":      ("🟡", "crew"),
     "request_delivered":      ("📦", "crew"),
     "request_cancelled":      ("⬜", "crew"),
@@ -577,6 +611,70 @@ def get_comments_with_photos(task_id):
     try:
         return supabase.table("task_comments").select("*").eq("task_id", str(task_id)).order("created_at", desc=False).execute().data or []
     except Exception: return []
+
+# ============================================
+# SPRINT 12: WHATSAPP-STYLE CHAT
+# ============================================
+
+def get_all_comments_grouped():
+    """Pobiera wszystkie komentarze pogrupowane po zadaniach."""
+    try:
+        t_r = supabase.table("tasks").select("id, name").execute()
+        tasks = {t['id']: t['name'] for t in (t_r.data or [])}
+        c_r = supabase.table("task_comments").select("*").order("created_at").execute()
+        comments = c_r.data or []
+        grouped = {}
+        for c in comments:
+            tid = c.get('task_id')
+            if tid not in grouped:
+                grouped[tid] = {"task_id": tid, "task_name": tasks.get(tid, f"Zadanie {tid}"), "comments": []}
+            grouped[tid]['comments'].append(c)
+        return list(grouped.values())
+    except Exception: return []
+
+def render_whatsapp_chat(comments, current_user, task_name=""):
+    """Renderuje chat w stylu WhatsApp."""
+    if task_name: st.markdown(f"#### 💬 {task_name}")
+    st.divider()
+    for c in comments:
+        author = c.get('author_name', 'Nieznany')
+        is_me = (author == current_user)
+        # Stylistyka baniek
+        bg = "#e0e0e0" if is_me else "#0084ff"
+        txt = "#000" if is_me else "#fff"
+        align = "flex-end" if is_me else "flex-start"
+        margin = "30%" if is_me else "0"
+        
+        ts = c.get('created_at', '')[11:16]
+        st.markdown(f"""
+        <div style="display: flex; justify-content: {align}; margin-bottom: 8px; margin-left: {margin};">
+            <div style="background-color: {bg}; color: {txt}; padding: 12px 16px; border-radius: 18px; 
+                        max-width: 85%; font-size: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+                        line-height: 1.4;">
+                <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; opacity: 0.8;">{author}</div>
+                {c.get('content', '')}
+                <div style="font-size: 10px; opacity: 0.6; text-align: right; margin-top: 4px;">{ts}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        if c.get('image_url'):
+            st.image(c['image_url'], use_container_width=True, caption=f"📸 {author}")
+
+def render_chat_input(task_id, current_user):
+    """Input box jak w WhatsAppie."""
+    with st.container():
+        c1, c2, c3 = st.columns([3, 1, 0.8])
+        msg = c1.text_input("Wiadomość", placeholder="Napisz...", label_visibility="collapsed", key=f"chat_in_{task_id}")
+        up = c2.file_uploader("📸", type=["jpg", "png"], label_visibility="collapsed", key=f"chat_up_{task_id}")
+        if c3.button("➤", key=f"chat_send_{task_id}", type="primary", use_container_width=True):
+            if msg.strip():
+                url = None
+                if up:
+                    res = upload_task_photo(task_id, up)
+                    if res['success']: url = res['url']
+                role = "investor" if current_user != "Karol" else "crew"
+                add_comment_with_photo(task_id, current_user, role, msg, url)
+                st.rerun()
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -1015,9 +1113,16 @@ if st.session_state["role"] == "crew":
                         if st.button("🔔 DO ODBIORU", key=f"inspect_{task['id']}", use_container_width=True, type="primary"):
                             submit_for_inspection(task['id'])
                             st.rerun()
-                        if st.button("⛔ ZABLOKUJ", key=f"block_{task['id']}", use_container_width=True):
-                            report_blocker(task['id'], "OTHER", "Zgłoszona blokada z Kanbana")
-                            st.rerun()
+                        
+                        # --- NOWY FORMULARZ BLOKADY (Sprint 13) ---
+                        with st.expander("⛔ ZABLOKUJ ZADANIE"):
+                            reason = st.text_area("Dlaczego stoisz? (wymagane)", key=f"reason_{task['id']}")
+                            if st.button("Potwierdź blokadę", key=f"conf_block_{task['id']}", type="primary"):
+                                if reason.strip():
+                                    report_blocker(task['id'], reason)
+                                    st.rerun()
+                                else:
+                                    st.error("Musisz podać powód!")
 
         with c3:
             st.markdown("### 🔔 DO ODBIORU")
@@ -1101,51 +1206,35 @@ if st.session_state["role"] == "crew":
                     st.rerun()
 
     with tab_comm:
-        st.markdown("## 💬 Centrum Komunikacji")
-        st.caption("Wszystkie rozmowy w jednym miejscu. Kliknij 'POKAŻ', aby przejść do zadania.")
+        st.title("💬 Centrum Komunikacji")
+        all_comments_grouped = get_all_comments_grouped()
         
-        f_col1, f_col2 = st.columns(2)
-        f_task = f_col1.selectbox("🔍 Filtruj po zadaniu", ["Wszystkie"] + [t['name'] for t in tasks_ord])
-        f_auth = f_col2.selectbox("👤 Autor", ["Wszyscy", "Inwestor", "Ja (Karol)"])
-        
-        role_map = {"Inwestor": "investor", "Ja (Karol)": "crew"}
-        comments = get_filtered_comments(
-            task_name=None if f_task == "Wszystkie" else f_task,
-            author_role=role_map.get(f_auth)
-        )
-        
-        if not comments:
-            st.info("Brak wiadomości spełniających kryteria.")
+        if not all_comments_grouped:
+            st.info("📭 Brak komentarzy.")
         else:
-            for c in comments:
-                with st.container(border=True):
-                    header_col, jump_col = st.columns([4, 1])
-                    with header_col:
-                        auth_icon = "🔵" if c['author_role'] == 'investor' else "🟡"
-                        st.markdown(f"{auth_icon} **{c['author_name']}** | {c['task_name']} | <span style='color:grey'>{c['created_at'][11:16]}</span>", unsafe_allow_html=True)
-                        st.write(f"> {c['content']}")
-                        if c.get('image_url'):
-                            with st.expander("📸 Zobacz zdjęcie"):
-                                st.image(c['image_url'], use_container_width=True)
-                    with jump_col:
-                        if st.button("👁️ POKAŻ", key=f"jump_{c['id']}"):
-                            st.session_state.jump_to_task_id = c['task_id']
-                            st.info(f"Zadanie '{c['task_name']}' podświetlone na Kanbanie!")
-                        if st.button("↩️ ODPOWIEDZ", key=f"rep_{c['id']}"):
-                            st.session_state.reply_to_comment_id = c['id']
-                    
-                    if st.session_state.get("reply_to_comment_id") == c['id']:
-                        with st.form(f"rep_form_{c['id']}", clear_on_submit=True):
-                            rep_txt = st.text_area("Twoja wiadomość")
-                            rep_img = st.file_uploader("Załącz zdjęcie", type=["jpg", "png"], key=f"rep_img_{c['id']}")
-                            if st.form_submit_button("Wyślij odpowiedź"):
-                                url = None
-                                if rep_img:
-                                    res = upload_task_photo(c['task_id'], rep_img)
-                                    if res['success']: url = res['url']
-                                add_comment_with_photo(c['task_id'], "Karol", "crew", rep_txt, url)
-                                st.session_state.reply_to_comment_id = None
-                                st.rerun()
+            col_side, col_chat = st.columns([2, 4])
+            with col_side:
+                st.markdown("### 📋 Zadania")
+                if st.button("🌍 Wszystkie wiadomości", use_container_width=True, key="crew_global"):
+                    st.session_state.selected_chat_crew = "GLOBAL"
+                st.divider()
+                for group in all_comments_grouped:
+                    if st.button(f"📌 {group['task_name']} ({len(group['comments'])})", use_container_width=True, key=f"crew_chat_{group['task_id']}"):
+                        st.session_state.selected_chat_crew = group['task_id']
+            
+            with col_chat:
+                sel = st.session_state.get("selected_chat_crew", "GLOBAL")
+                if sel == "GLOBAL":
+                    all_c = []
+                    for g in all_comments_grouped: all_c.extend(g['comments'])
+                    all_c.sort(key=lambda x: x.get('created_at', ''))
+                    render_whatsapp_chat(all_c, "Karol", "Wszystkie wiadomości")
+                    st.info("💡 Wybierz zadanie z listy po lewej, aby odpowiedzieć.")
+                else:
+                    task_c = next((g for g in all_comments_grouped if g['task_id'] == sel), None)
+                    if task_c:
+                        render_whatsapp_chat(task_c['comments'], "Karol", task_c['task_name'])
+                        render_chat_input(sel, "Karol")
 
     with tab_rep:
         st.subheader("📝 Zgłoś potrzebę / brak materiału")
@@ -1452,14 +1541,26 @@ elif menu == "1. Dashboard (Centrum)":
             with st.container(border=True):
                 bh1, bh2 = st.columns([4, 1])
                 bh1.markdown(f"### {task['name']}")
-                bh1.caption(f"Powód blokady: {task.get('blocker_reason', '—')}")
+                bh1.caption(f"Powód główny: {task.get('blocker_reason', '—')}")
                 bh2.error("🔴 BLOKADA")
+                
+                # Pobierz szczegółowe blokery z bazy
+                blks = get_blockers_for_task(task['id'])
+                if blks:
+                    st.markdown("**Aktywne przyczyny:**")
+                    for b in blks:
+                        col_b1, col_b2 = st.columns([3, 1])
+                        col_b1.write(f"• {b['description']}")
+                        if col_b2.button("✅ ODBLOKUJ", key=f"res_{b['id']}", use_container_width=True):
+                            resolve_blocker(b['id'], "Rozwiązane przez Inwestora w Command Center")
+                            st.rerun()
+                
                 render_comment_section(task['id'], "investor")
-                # zgłoszenia powiązane z tym zadaniem
+                
+                # Zgłoszenia materiałowe powiązane z tym zadaniem
                 linked_reqs = [r for r in (crew_grouped.get("Nowe", []) + crew_grouped.get("Potwierdzone", [])) if r.get("linked_task_id") == task["id"]]
                 for req in linked_reqs:
                     st.write(f"📦 **{req['title']}** — status: {req['status']}")
-                    if req.get("investor_note"): st.caption(f"Twoja notatka: {req['investor_note']}")
                     if req["status"] == "Potwierdzone":
                         if st.button(f"📦 DOSTARCZONE — {req['title']}", key=f"cc_del_{req['id']}", type="primary"):
                             mark_crew_request_delivered(req["id"])
@@ -1509,52 +1610,35 @@ elif menu == "1. Dashboard (Centrum)":
 
 
 elif menu == "1a. Centrum Komunikacji":
-    st.markdown("## 💬 Centrum Komunikacji (Inwestor)")
-    st.caption("Przeglądaj wszystkie rozmowy i zdjęcia z budowy.")
+    st.title("💬 Centrum Komunikacji")
+    all_comments_grouped = get_all_comments_grouped()
     
-    tasks_all = get_tasks_ordered()
-    f_c1, f_c2 = st.columns(2)
-    f_task = f_c1.selectbox("🔍 Zadanie", ["Wszystkie"] + [t['name'] for t in tasks_all], key="inv_f_task")
-    f_auth = f_c2.selectbox("👤 Autor", ["Wszyscy", "Karol", "Ja (Inwestor)"], key="inv_f_auth")
-    
-    role_map = {"Karol": "crew", "Ja (Inwestor)": "investor"}
-    comments = get_filtered_comments(
-        task_name=None if f_task == "Wszystkie" else f_task,
-        author_role=role_map.get(f_auth)
-    )
-    
-    if not comments:
-        st.info("Brak wiadomości.")
+    if not all_comments_grouped:
+        st.info("📭 Brak komentarzy.")
     else:
-        for c in comments:
-            with st.container(border=True):
-                h_col, j_col = st.columns([4, 1])
-                with h_col:
-                    icon = "🟡" if c['author_role'] == 'crew' else "🔵"
-                    st.markdown(f"{icon} **{c['author_name']}** | {c['task_name']} | <span style='color:grey'>{c['created_at'][11:16]}</span>", unsafe_allow_html=True)
-                    st.write(f"> {c['content']}")
-                    if c.get('image_url'):
-                        with st.expander("📸 Zobacz zdjęcie"):
-                            st.image(c['image_url'], use_container_width=True)
-                with j_col:
-                    if st.button("👁️ POKAŻ", key=f"inv_jump_{c['id']}"):
-                        st.session_state.jump_to_task_id = c['task_id']
-                        st.info(f"Zadanie '{c['task_name']}' gotowe do podglądu!")
-                    if st.button("↩️ ODPOWIEDZ", key=f"inv_rep_{c['id']}"):
-                        st.session_state.reply_to_comment_id = c['id']
-                
-                if st.session_state.get("reply_to_comment_id") == c['id']:
-                    with st.form(f"inv_rep_form_{c['id']}", clear_on_submit=True):
-                        rep_txt = st.text_area("Twoja wiadomość")
-                        rep_img = st.file_uploader("Załącz zdjęcie", type=["jpg", "png"], key=f"inv_rep_img_{c['id']}")
-                        if st.form_submit_button("Wyślij odpowiedź"):
-                            url = None
-                            if rep_img:
-                                res = upload_task_photo(c['task_id'], rep_img)
-                                if res['success']: url = res['url']
-                            add_comment_with_photo(c['task_id'], "Inwestor", "investor", rep_txt, url)
-                            st.session_state.reply_to_comment_id = None
-                            st.rerun()
+        col_side, col_chat = st.columns([2, 4])
+        with col_side:
+            st.markdown("### 📋 Zadania")
+            if st.button("🌍 Wszystkie wiadomości", use_container_width=True, key="inv_global"):
+                st.session_state.selected_chat = "GLOBAL"
+            st.divider()
+            for group in all_comments_grouped:
+                if st.button(f"📌 {group['task_name']} ({len(group['comments'])})", use_container_width=True, key=f"inv_chat_{group['task_id']}"):
+                    st.session_state.selected_chat = group['task_id']
+        
+        with col_chat:
+            sel = st.session_state.get("selected_chat", "GLOBAL")
+            if sel == "GLOBAL":
+                all_c = []
+                for g in all_comments_grouped: all_c.extend(g['comments'])
+                all_c.sort(key=lambda x: x.get('created_at', ''))
+                render_whatsapp_chat(all_c, "Inwestor", "Wszystkie wiadomości")
+                st.info("💡 Wybierz zadanie z listy po lewej, aby odpowiedzieć.")
+            else:
+                task_c = next((g for g in all_comments_grouped if g['task_id'] == sel), None)
+                if task_c:
+                    render_whatsapp_chat(task_c['comments'], "Inwestor", task_c['task_name'])
+                    render_chat_input(sel, "Inwestor")
 
 elif menu == "2. Start remontu":
     st.title("🚀 Kreator Startowy (Cloud)")
