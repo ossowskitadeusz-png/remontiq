@@ -1366,15 +1366,12 @@ menu = st.sidebar.radio("Nawigacja", [
     "1. Dashboard (Centrum)",
     "1a. Centrum Komunikacji",
     "2. Start remontu",
-    "3. Materiały i sprzęty",
     "4. Zadania",
     "4a. Odbiór Prac",
     "5. Ekipa",
     "6. Wydatki (Finanse)",
-    "7. Decyzje",
-    "8. Ryzyka",
-    "9. Dziennik",
-    "10. Ustawienia",
+    "7. Dziennik Projektu (Decyzje/Ryzyka)",
+    "8. Ustawienia",
     "0. Charter Projektu",
 ])
 
@@ -1719,135 +1716,34 @@ elif menu == "2. Start remontu":
             st.rerun()
     df_r_view = read_table("rooms")
     if not df_r_view.empty:
-        st.dataframe(df_r_view[['name', 'budget', 'created_at']], hide_index=True)
+        st.dataframe(df_r_view[['name', 'created_at']], hide_index=True)
     else:
         st.info("Brak wprowadzonych pomieszczeń.")
 
-elif menu == "3. Materiały i sprzęty":
-    st.title("📦 Materiały i Sprzęty")
-    
-    with st.expander("➕ Dodaj nowy materiał"):
-        with st.form("new_mat", clear_on_submit=True):
-            m_name = st.text_input("Nazwa materiału *")
-            m_room = st.selectbox("Przypisz do pomieszczenia:", options=rooms_dict, format_func=lambda x: x['name'])
-            c1, c2 = st.columns(2)
-            m_planned = c1.number_input("Ilość planowana", min_value=0.0, step=1.0)
-            m_unit = c2.selectbox("Jednostka", ["szt", "m2", "mb", "l", "kg"])
-            
-            c3, c4 = st.columns(2)
-            m_need = c3.date_input("Potrzebny do (opcjonalnie)", value=None)
-            m_lead = c4.number_input("Czas dostawy (dni)", min_value=0, step=1)
-            
-            if st.form_submit_button("Dodaj"):
-                if m_name.strip():
-                    supabase.table("materials").insert({
-                        "name": m_name, "room_id": m_room['id'], "quantity_planned": m_planned, "unit": m_unit, 
-                        "needed_by": str(m_need) if m_need else None, "lead_time_days": m_lead
-                    }).execute()
-                    st.success("Dodano materiał!")
-                    st.rerun()
-                else: st.error("Nazwa jest wymagana!")
-                
-    st.subheader("Zarządzanie Materiałami")
-    df_mats = read_table("materials", select="id, name, status, location, available_for_crew, crew_confirmed, quantity_planned, quantity_received, unit, cost_actual")
-    if not df_mats.empty:
-        edited_mats = st.data_editor(
-            df_mats, 
-            disabled=["id", "name", "cost_actual", "quantity_received", "quantity_planned", "unit"], 
-            width="stretch", hide_index=True, key="mat_editor"
-        )
-        if st.button("💾 Zapisz zmiany w materiałach"):
-            for _, row in edited_mats.iterrows():
-                supabase.table("materials").update({
-                    "status": row['status'], "location": row['location'], 
-                    "available_for_crew": bool(row['available_for_crew']), 
-                    "crew_confirmed": bool(row['crew_confirmed'])
-                }).eq("id", row['id']).execute()
-            st.success("Zapisano w chmurze!")
-            st.rerun()
-            
-        with st.expander("🗑️ Archiwizuj materiał"):
-            del_id = st.selectbox("Wybierz materiał", df_mats['id'].tolist(), format_func=lambda x: df_mats[df_mats['id']==x]['name'].iloc[0])
-            if st.button("Archiwizuj"):
-                supabase.table("materials").update({"is_deleted": True}).eq("id", del_id).execute()
-                st.success("Zarchiwizowano!")
-                st.rerun()
-
 elif menu == "6. Wydatki (Finanse)":
     st.title("💰 Wydatki (Supabase Sync)")
-    df_mats_options = read_table("materials", select="id, name, unit")
-    
-    # --- BUDGET HEALTH WIDGET (Sprint 8) ---
-    forecast = calculate_budget_forecast()
-    if forecast:
-        with st.container(border=True):
-            f1, f2, f3 = st.columns(3)
-            f1.markdown(f"### {forecast['status']}\n**Pozostało: {forecast['remaining']:,.0f} zł**")
-            f2.markdown(f"**Tempo:** {forecast['daily_burn']} zł/dzień\n**Koniec środków:** {forecast['forecast_date']}")
-            if forecast['days_until_depleted'] < 30:
-                f3.warning(f"⚠️ Środki wyczerpią się za {forecast['days_until_depleted']} dni!")
-            else:
-                f3.success(f"✅ Budżet bezpieczny ({forecast['days_until_depleted']} dni)")
-    st.divider()
+    df_exp = read_table("expenses")
+    total = df_exp['amount'].sum() if not df_exp.empty else 0
+    st.metric("Całkowite wydatki", f"{total:,.2f} zł")
+
     with st.expander("➕ Dodaj wydatek", expanded=True):
-        with st.form("new_expense", clear_on_submit=True):
-            e_desc = st.text_input("Opis (np. Płytki z Castoramy) *")
-            c1, c2 = st.columns(2)
-            e_amount = c1.number_input("Kwota (zł) *", min_value=0.0, step=10.0)
-            e_date = c2.date_input("Data wydatku", value=date.today())
-            
-            st.markdown("---")
-            if not df_mats_options.empty:
-                mat_list = [{"id": None, "name": "Brak (Usługa, transport)"}]
-                for _, r in df_mats_options.iterrows():
-                    mat_list.append({"id": r['id'], "name": f"{r['name']} ({r['unit']})"})
-                sel_mat = st.selectbox("Przypisz do materiału:", options=mat_list, format_func=lambda x: x['name'])
-                e_qty = st.number_input("Ilość dostarczona na budowę?", min_value=0.0, step=1.0)
-            else:
-                st.info("Brak wpisanych materiałów.")
-                sel_mat = {"id": None}; e_qty = 0.0
-            
-            if st.form_submit_button("✅ Zapisz wydatek"):
-                if not e_desc.strip() or e_amount <= 0:
-                    st.error("Opis i kwota > 0 są wymagane!")
-                else:
+        with st.form("new_expense_simple"):
+            e_desc = st.text_input("Opis (np. Płytki Castorama) *")
+            e_amount = st.number_input("Kwota (zł) *", min_value=0.0)
+            e_date = st.date_input("Data", value=date.today())
+            if st.form_submit_button("Zapisz Wydatek"):
+                if e_desc.strip() and e_amount > 0:
                     supabase.table("expenses").insert({
-                        "description": e_desc, "amount": e_amount, "quantity": e_qty,
-                        "material_id": sel_mat['id'], "date": str(e_date)
+                        "description": e_desc, "amount": e_amount, "date": str(e_date)
                     }).execute()
-                    st.success("Dodano! Chmura automatycznie przeliczyła stany Materiałów (Trigger).")
                     st.rerun()
+                else: st.error("Opis i kwota są wymagane.")
 
     st.subheader("📜 Historia Wydatków")
-    
-    # --- BURN-DOWN CHART (Sprint 10) ---
-    bd = get_burn_down_data()
-    if bd:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=bd['dates'], y=bd['planned'], name="Plan", line=dict(color="#2b6cb0", dash="dash")))
-        fig.add_trace(go.Scatter(x=bd['dates'], y=bd['actual'], name="Realizacja", fill="tozeroy", line=dict(color="#48bb78")))
-        fig.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), margin=dict(l=0,r=0,t=20,b=0))
-        st.plotly_chart(fig, width="stretch")
-
-    df_exp = read_table("expenses")
     if not df_exp.empty:
-        if not df_mats_options.empty:
-            df_exp = df_exp.merge(df_mats_options[['id', 'name']], left_on='material_id', right_on='id', how='left')
-            df_exp.rename(columns={"name": "Material"}, inplace=True)
-        else:
-            df_exp['Material'] = ""
-            
-        view_df = df_exp[['id', 'date', 'description', 'amount', 'quantity', 'Material']].copy()
-        view_df.rename(columns={"date": "Data", "description": "Opis", "amount": "Kwota", "quantity": "Ilość"}, inplace=True)
-        st.dataframe(view_df, width="stretch", hide_index=True)
-        
-        with st.expander("🗑️ Anuluj wydatek (Cofnij sync)"):
-            del_exp_id = st.selectbox("Wybierz wydatek", view_df['id'].tolist(), format_func=lambda x: f"[{x[:4]}] {view_df[view_df['id']==x]['Opis'].iloc[0]} - {view_df[view_df['id']==x]['Kwota'].iloc[0]} zł")
-            if st.button("Anuluj wydatek"):
-                supabase.table("expenses").update({"is_deleted": True}).eq("id", del_exp_id).execute()
-                st.success("Zarchiwizowano. Supabase Trigger skorygował koszty i ilości w Materiałach!")
-                st.rerun()
-    else: st.info("Brak wydatków.")
+        st.dataframe(df_exp[['date', 'description', 'amount']], width="stretch", hide_index=True)
+    else:
+        st.info("Brak zarejestrowanych wydatków.")
 
 elif menu == "4. Zadania":
     st.title("📋 PLAN KAROLA — Twoje Zadania")
@@ -2032,67 +1928,50 @@ elif menu == "5. Ekipa":
 # NOWE MODUŁY SPRINT 4 (7-10)
 # ==========================================
 
-elif menu == "7. Decyzje":
-    st.title("🤔 Decyzje")
-    st.write("Śledź kluczowe decyzje, od których zależy postęp prac.")
+elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
+    st.title("📒 Dziennik Projektu")
+    st.write("Centralne miejsce zarządzania decyzjami i problemami.")
     
-    with st.expander("➕ Dodaj decyzję do podjęcia"):
-        with st.form("new_dec"):
-            d_title = st.text_input("Czego dotyczy decyzja? *")
-            d_desc = st.text_area("Szczegóły / Opcje")
-            d_room = st.selectbox("Dotyczy pokoju (Opcjonalnie):", options=rooms_dict, format_func=lambda x: x['name'])
-            c1, c2 = st.columns(2)
-            d_due = c1.date_input("Termin na podjęcie decyzji", value=date.today() + timedelta(days=7))
-            d_impact = c2.selectbox("Wpływ na remont", ["Krytyczny", "Średni", "Niski"], index=1)
-            
-            if st.form_submit_button("Dodaj decyzję"):
-                if d_title.strip():
-                    supabase.table("decisions").insert({
-                        "title": d_title, "description": d_desc, "room_id": d_room['id'],
-                        "due_date": str(d_due), "impact": d_impact, "status": "Do podjęcia"
-                    }).execute()
-                    st.success("Zapisano decyzję!")
+    col1, col2 = st.columns(2)
+    with col1:
+        with st.expander("➕ Dodaj Decyzję"):
+            with st.form("form_dec"):
+                t = st.text_input("Tytuł decyzji *")
+                d = st.date_input("Termin")
+                if st.form_submit_button("Dodaj"):
+                    supabase.table("project_logs").insert({"type": "DECISION", "title": t, "due_date": str(d)}).execute()
                     st.rerun()
-                else: st.error("Tytuł jest wymagany!")
-                
-    df_dec = read_table("decisions", select="id, title, impact, status, due_date, decision_result")
-    if not df_dec.empty:
-        edited_dec = st.data_editor(df_dec, disabled=["id", "title", "due_date"], hide_index=True, width="stretch")
-        if st.button("💾 Zapisz zmiany w decyzjach"):
-            for _, row in edited_dec.iterrows():
-                supabase.table("decisions").update({
-                    "status": row['status'], "impact": row['impact'], "decision_result": row['decision_result']
-                }).eq("id", row['id']).execute()
-            st.success("Zapisano decyzje!")
-            st.rerun()
-    else: st.info("Brak decyzji w systemie.")
-
-elif menu == "8. Ryzyka":
-    st.title("🚨 Rejestr Problemów i Ryzyk")
-    st.write("Niespodzianki. Te 'Krytyczne' lądują bezpośrednio na szczycie Dashboardu z potężnym priorytetem.")
-    
-    with st.expander("➕ Zgłoś Problem"):
-        with st.form("new_iss"):
-            i_title = st.text_input("Co się stało? (Problem) *")
-            i_desc = st.text_area("Opis problemu")
-            i_room = st.selectbox("Dotyczy pokoju (Opcjonalnie):", options=rooms_dict, format_func=lambda x: x['name'])
-            i_sev = st.selectbox("Ważność (Priorytet)", ["Krytyczne", "Średnie", "Niskie"], index=1)
-            if st.form_submit_button("Dodaj Ryzyko"):
-                if i_title.strip():
-                    supabase.table("issues").insert({
-                        "title": i_title, "description": i_desc, "room_id": i_room['id'], "severity": i_sev, "status": "Otwarte"
-                    }).execute()
-                    st.success("Zgłoszono problem!")
+    with col2:
+        with st.expander("➕ Zgłoś Problem"):
+            with st.form("form_iss"):
+                t = st.text_input("Opis problemu *")
+                s = st.selectbox("Ważność", ["LOW", "MEDIUM", "HIGH"])
+                if st.form_submit_button("Zgłoś"):
+                    supabase.table("project_logs").insert({"type": "ISSUE", "title": t, "severity": s}).execute()
                     st.rerun()
-                else: st.error("Tytuł jest wymagany!")
 
-    df_iss = read_table("issues", select="id, title, severity, status")
-    if not df_iss.empty:
-        edited_iss = st.data_editor(df_iss, disabled=["id", "title"], hide_index=True, width="stretch")
-        if st.button("💾 Zapisz edycję"):
-            for _, row in edited_iss.iterrows():
-                supabase.table("issues").update({"status": row['status'], "severity": row['severity']}).eq("id", row['id']).execute()
-            st.rerun()
+    tab_dec, tab_iss = st.tabs(["📝 Decyzje", "⚠️ Problemy"])
+    with tab_dec:
+        recs = supabase.table("project_logs").select("*").eq("type", "DECISION").execute().data or []
+        if recs:
+            df = pd.DataFrame(recs)
+            ed = st.data_editor(df[['id', 'title', 'status', 'due_date', 'result']], key="ed_dec", width="stretch")
+            if st.button("Zapisz zmiany (Decyzje)"):
+                for _, r in ed.iterrows():
+                    supabase.table("project_logs").update({"status": r['status'], "result": r['result']}).eq("id", r['id']).execute()
+                st.rerun()
+        else: st.info("Brak decyzji.")
+
+    with tab_iss:
+        recs = supabase.table("project_logs").select("*").eq("type", "ISSUE").execute().data or []
+        if recs:
+            df = pd.DataFrame(recs)
+            ed = st.data_editor(df[['id', 'title', 'severity', 'status']], key="ed_iss", width="stretch")
+            if st.button("Zapisz zmiany (Problemy)"):
+                for _, r in ed.iterrows():
+                    supabase.table("project_logs").update({"status": r['status'], "severity": r['severity']}).eq("id", r['id']).execute()
+                st.rerun()
+        else: st.info("Brak problemów.")
             
         st.divider()
         st.subheader("Przekształć w zadanie (Genialny Workflow)")
