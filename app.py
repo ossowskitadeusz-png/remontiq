@@ -1088,6 +1088,22 @@ if st.session_state["role"] == "crew":
         <div class="kpi-tile"><div style="font-size:20px">📅</div><div style="font-size:11px;color:#94a3b8">DNI</div><div style="font-size:22px;font-weight:bold">{kpis['days_to_end']}</div></div>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Szybkie Zgłoszenie (Nowość)
+    with st.expander("➕ ZGŁOŚ POTRZEBĘ / BRAK MATERIAŁU"):
+        with st.form("crew_req_form_new", clear_on_submit=True):
+            t_req = st.text_input("Czego brakuje? *", placeholder="np. Brak fugi, potrzebny PIN do domofonu")
+            d_req = st.date_input("Potrzebne na kiedy?")
+            b_req = st.checkbox("🚨 To blokuje moją pracę!")
+            if st.form_submit_button("Wyślij do Inwestora"):
+                if t_req:
+                    # Logika zgłoszenia
+                    supabase.table("crew_requests").insert({
+                        "title": t_req, "status": "Nowe", "created_at": datetime.now().isoformat()
+                    }).execute()
+                    st.success("Wysłano!")
+                    st.rerun()
+                else: st.error("Wpisz tytuł.")
 
     # 2. PROJEKT LOGS (Alerts)
     try:
@@ -1149,11 +1165,36 @@ if st.session_state["role"] == "crew":
                 if c3.button("💬 CZAT", key=f"chat_{t['id']}"):
                     st.session_state["sel_task_chat"] = t['id']
                     st.rerun()
+                    
+        # OBSŁUGA CZATU (Jeśli wybrano zadanie)
+        if st.session_state.get("sel_task_chat"):
+            sel_id = st.session_state["sel_task_chat"]
+            task_info = next((t for t in tasks if t['id'] == sel_id), None)
+            if task_info:
+                st.markdown("---")
+                st.subheader(f"💬 Czat: {task_info['name']}")
+                if st.button("❌ Zamknij czat"):
+                    st.session_state["sel_task_chat"] = None
+                    st.rerun()
+                
+                # Pobieramy komentarze dla tego zadania
+                comms = supabase.table("task_comments").select("*").eq("task_id", sel_id).eq("is_deleted", False).order("created_at").execute().data or []
+                render_whatsapp_chat(comms, "Karol", sel_id, context="crew_dash")
+                render_chat_input(sel_id, "Karol", context="crew_dash")
 
-    # 4. GANTT & INNE (Buried in expander for power users)
-    with st.expander("📅 Pełny Harmonogram i inne narzędzia"):
-        # Tu możemy przenieść stare zakładki jeśli są potrzebne
-        st.write("Wykres Gantta i Raporty...")
+    # 4. GANTT & INNE (Harmonogram)
+    with st.expander("📅 Pełny Harmonogram i Historia Zgłoszeń"):
+        tab1, tab2 = st.tabs(["📋 Lista zadań", "📦 Moje zgłoszenia"])
+        with tab1:
+            all_t = supabase.table("tasks").select("*").order("planned_start_date").execute().data or []
+            if all_t:
+                st.dataframe(pd.DataFrame(all_t)[['name', 'kanban_status', 'is_blocked', 'planned_start_date']], hide_index=True, use_container_width=True)
+        with tab2:
+            reqs = supabase.table("crew_requests").select("*").order("created_at", desc=True).execute().data or []
+            if reqs:
+                for r in reqs:
+                    st.write(f"**{r['title']}** | Status: {r['status']}")
+            else: st.info("Brak zgłoszeń.")
 
 
 
