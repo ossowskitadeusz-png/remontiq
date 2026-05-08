@@ -294,7 +294,7 @@ def add_comment(task_id, author_name, author_role, content):
 def get_comments(task_id):
     """Pobierz historię komentarzy dla zadania."""
     try:
-        return supabase.table("task_comments").select("*").eq("task_id", task_id).order("created_at", desc=False).execute().data or []
+        return supabase.table("task_comments").select("*").eq("task_id", str(task_id)).order("created_at", desc=False).execute().data or []
     except Exception:
         return []
 
@@ -822,6 +822,7 @@ if st.session_state["role"] == "crew":
                 with st.container(border=True):
                     st.markdown(f"**{task['name']}**")
                     st.info("⏳ Czeka na akceptację")
+                    render_comment_section(task['id'], "crew")
 
         with c4:
             st.markdown("### ✅ ZAMKNIĘTE")
@@ -829,6 +830,7 @@ if st.session_state["role"] == "crew":
                 with st.container(border=True):
                     st.markdown(f"**{task['name']}**")
                     st.success("Zatwierdzone")
+                    render_comment_section(task['id'], "crew")
 
     with tab_plan:
         st.subheader("➕ Zaplanuj zadanie")
@@ -1161,6 +1163,7 @@ elif menu == "1. Dashboard (Centrum)":
                 bh1.markdown(f"### {task['name']}")
                 bh1.caption(f"Powód blokady: {task.get('blocker_reason', '—')}")
                 bh2.error("🔴 BLOKADA")
+                render_comment_section(task['id'], "investor")
                 # zgłoszenia powiązane z tym zadaniem
                 linked_reqs = [r for r in (crew_grouped.get("Nowe", []) + crew_grouped.get("Potwierdzone", [])) if r.get("linked_task_id") == task["id"]]
                 for req in linked_reqs:
