@@ -1047,47 +1047,113 @@ if st.session_state["role"] == "crew":
     
     st.markdown("""
 <style>
-    .kpi-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 20px; color: white; text-align: center; box-shadow: 0 8px 16px rgba(0,0,0,0.1); font-weight: bold; }
-    .blocker-badge { background: #ff6b6b; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
-    .log-decision { background: #2b6cb0; color: white; padding: 10px; border-radius: 8px; margin-bottom: 5px; border-left: 5px solid #90cdf4; }
-    .log-issue { background: #9b2c2c; color: white; padding: 10px; border-radius: 8px; margin-bottom: 5px; border-left: 5px solid #feb2b2; }
+    /* Premium Design System v6.0 */
+    .stApp { background: #0f172a; color: #e2e8f0; }
+    .kpi-container { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 15px; }
+    .kpi-tile { 
+        min-width: 120px; flex: 1; 
+        background: rgba(30, 41, 59, 0.7); 
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 16px; padding: 15px; text-align: center;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    .task-card {
+        background: rgba(30, 41, 59, 0.5);
+        border-radius: 20px; padding: 20px; margin-bottom: 15px;
+        border-left: 8px solid #4a5568;
+        transition: transform 0.2s;
+    }
+    .task-card:hover { transform: translateY(-2px); background: rgba(30, 41, 59, 0.8); }
+    .status-active { border-left-color: #f59e0b; } /* Orange */
+    .status-ready { border-left-color: #3b82f6; } /* Blue */
+    .status-blocked { border-left-color: #ef4444; } /* Red */
+    .status-done { border-left-color: #10b981; } /* Green */
+    
+    .action-btn { 
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        color: white; border: none; padding: 10px 20px; border-radius: 12px;
+        font-weight: bold; width: 100%; margin-top: 10px; cursor: pointer;
+    }
 </style>
 """, unsafe_allow_html=True)
     
-    st.subheader("📈 Szybki Przegląd")
+    # 1. KPI SECTION (Scrollable Tiles)
     kpis = get_crew_kpis()
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1: st.metric("🟢 Aktywne", kpis['in_progress'])
-    with col2: st.metric("❌ Zablokowane", kpis['blocked'])
-    with col3: st.metric("🔔 Do Odbioru", kpis['awaiting_inspection'])
-    with col4: st.metric("✅ Ukończone", kpis['completed'])
-    with col5: st.metric("⏳ Dni do Końca", kpis['days_to_end'])
-    
-    st.divider()
-    
-    # --- PROJEKT LOGS DLA EKIPY ---
-    st.subheader("🔔 Decyzje i Problemy")
+    st.markdown(f"""
+    <div class="kpi-container">
+        <div class="kpi-tile"><div style="font-size:20px">🟢</div><div style="font-size:11px;color:#94a3b8">AKTYWNE</div><div style="font-size:22px;font-weight:bold">{kpis['in_progress']}</div></div>
+        <div class="kpi-tile"><div style="font-size:20px">❌</div><div style="font-size:11px;color:#94a3b8">BLOKADY</div><div style="font-size:22px;font-weight:bold;color:#ef4444">{kpis['blocked']}</div></div>
+        <div class="kpi-tile"><div style="font-size:20px">🔔</div><div style="font-size:11px;color:#94a3b8">ODBIORY</div><div style="font-size:22px;font-weight:bold">{kpis['awaiting_inspection']}</div></div>
+        <div class="kpi-tile"><div style="font-size:20px">📅</div><div style="font-size:11px;color:#94a3b8">DNI</div><div style="font-size:22px;font-weight:bold">{kpis['days_to_end']}</div></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 2. PROJEKT LOGS (Alerts)
     try:
-        active_logs = supabase.table("project_logs").select("*").neq("status", "RESOLVED").neq("status", "DONE").order("created_at", desc=True).limit(5).execute().data or []
+        active_logs = supabase.table("project_logs").select("*").neq("status", "RESOLVED").neq("status", "DONE").order("created_at", desc=True).limit(3).execute().data or []
         if active_logs:
             for l in active_logs:
                 cls = "log-decision" if l['type'] == "DECISION" else "log-issue"
-                label = "💡 DECYZJA" if l['type'] == "DECISION" else "🚨 PROBLEM"
+                st.markdown(f'<div class="{cls}"><b>{"💡 DECYZJA" if l["type"]=="DECISION" else "🚨 PROBLEM"}:</b> {l["title"]}</div>', unsafe_allow_html=True)
+    except: pass
+
+    st.divider()
+
+    # 3. TASKS (The main focus)
+    st.subheader("🛠️ Moje Zadania na Dziś")
+    
+    tasks = supabase.table("tasks").select("*").neq("kanban_status", "COMPLETED").order("planned_start_date").execute().data or []
+    
+    if not tasks:
+        st.success("Wszystko zrobione! Czekaj na nowe zadania od Inwestora.")
+    else:
+        for t in tasks:
+            status = t.get("kanban_status", "BACKLOG")
+            card_class = "task-card"
+            if t.get("is_blocked"): card_class += " status-blocked"
+            elif status == "IN_PROGRESS": card_class += " status-active"
+            elif status == "READY": card_class += " status-ready"
+            
+            with st.container():
                 st.markdown(f"""
-                <div class="{cls}">
-                    <div style="font-size:10px; font-weight:bold; opacity:0.8;">{label} | {l.get('due_date') or ''}</div>
-                    <div style="font-size:14px;">{l['title']}</div>
-                    <div style="font-size:11px; font-style:italic; opacity:0.9;">Wynik: {l.get('result') or 'Oczekiwanie...'}</div>
+                <div class="{card_class}">
+                    <div style="display:flex; justify-content:space-between; align-items:start;">
+                        <h3 style="margin:0; font-size:18px;">{t['name']}</h3>
+                        <span style="font-size:10px; background:rgba(255,255,255,0.1); padding:4px 8px; border-radius:8px;">{status}</span>
+                    </div>
+                    <p style="font-size:13px; color:#94a3b8; margin:10px 0;">{t.get('description') or 'Brak opisu'}</p>
                 </div>
                 """, unsafe_allow_html=True)
-        else:
-            st.success("✅ Brak aktywnych blokad z Dziennika.")
-    except Exception:
-        st.info("Dziennik jest pusty.")
-    
-    st.divider()
-    
-    tab_kanban, tab_plan, tab_comm, tab_rep = st.tabs(["🗂️ Tablica Kanban", "📅 Manager Harmonogramu", "💬 Centrum Komunikacji", "📝 Zgłoś / Raport"])
+                
+                # Szybkie Akcje (Big Buttons)
+                c1, c2, c3 = st.columns(3)
+                if status == "READY" and not t.get("is_blocked"):
+                    if c1.button("▶️ ZACZNIJ", key=f"start_{t['id']}"):
+                        supabase.table("tasks").update({"kanban_status": "IN_PROGRESS"}).eq("id", t['id']).execute()
+                        st.rerun()
+                if status == "IN_PROGRESS" and not t.get("is_blocked"):
+                    if c1.button("✅ GOTOWE", key=f"done_{t['id']}"):
+                        supabase.table("tasks").update({"kanban_status": "AWAITING_INSPECTION"}).eq("id", t['id']).execute()
+                        st.rerun()
+                
+                if not t.get("is_blocked"):
+                    if c2.button("🚫 BLOKADA", key=f"block_{t['id']}"):
+                        st.session_state[f"show_block_{t['id']}"] = True
+                else:
+                    st.error(f"Zablokowane: {t.get('blocker_reason')}")
+                    if c2.button("🔓 NAPRAWIONE", key=f"resolve_{t['id']}"):
+                        supabase.table("tasks").update({"is_blocked": False, "blocker_reason": None}).eq("id", t['id']).execute()
+                        st.rerun()
+                
+                if c3.button("💬 CZAT", key=f"chat_{t['id']}"):
+                    st.session_state["sel_task_chat"] = t['id']
+                    st.rerun()
+
+    # 4. GANTT & INNE (Buried in expander for power users)
+    with st.expander("📅 Pełny Harmonogram i inne narzędzia"):
+        # Tu możemy przenieść stare zakładki jeśli są potrzebne
+        st.write("Wykres Gantta i Raporty...")
 
     with tab_kanban:
         # ===== GANTT CHART =====
