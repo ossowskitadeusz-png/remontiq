@@ -420,7 +420,8 @@ def render_comment_section(task_id, role):
     
     with st.expander(f"💬 Chat ({len(comments)})"):
         render_whatsapp_chat(comments, user_name)
-        render_chat_input(task_id, user_name)
+        # Używamy prefiksu 'kanban', bo to wywołanie z widoku tablicy/listy zadań
+        render_chat_input(task_id, user_name, key_prefix="kanban")
 
 def calculate_budget_forecast():
     """Oblicz prognozę wyczerpania budżetu."""
@@ -660,13 +661,14 @@ def render_whatsapp_chat(comments, current_user, task_name=""):
         if c.get('image_url'):
             st.image(c['image_url'], use_container_width=True, caption=f"📸 {author}")
 
-def render_chat_input(task_id, current_user):
-    """Input box jak w WhatsAppie."""
+def render_chat_input(task_id, current_user, key_prefix="chat"):
+    """Input box jak w WhatsAppie z unikalnym kluczem."""
     with st.container():
         c1, c2, c3 = st.columns([3, 1, 0.8])
-        msg = c1.text_input("Wiadomość", placeholder="Napisz...", label_visibility="collapsed", key=f"chat_in_{task_id}")
-        up = c2.file_uploader("📸", type=["jpg", "png"], label_visibility="collapsed", key=f"chat_up_{task_id}")
-        if c3.button("➤", key=f"chat_send_{task_id}", type="primary", use_container_width=True):
+        # Klucze są teraz unikalne dzięki key_prefix
+        msg = c1.text_input("Wiadomość", placeholder="Napisz...", label_visibility="collapsed", key=f"{key_prefix}_in_{task_id}")
+        up = c2.file_uploader("📸", type=["jpg", "png"], label_visibility="collapsed", key=f"{key_prefix}_up_{task_id}")
+        if c3.button("➤", key=f"{key_prefix}_send_{task_id}", type="primary", use_container_width=True):
             if msg.strip():
                 url = None
                 if up:
@@ -1234,7 +1236,7 @@ if st.session_state["role"] == "crew":
                     task_c = next((g for g in all_comments_grouped if g['task_id'] == sel), None)
                     if task_c:
                         render_whatsapp_chat(task_c['comments'], "Karol", task_c['task_name'])
-                        render_chat_input(sel, "Karol")
+                        render_chat_input(sel, "Karol", key_prefix="comm_crew")
 
     with tab_rep:
         st.subheader("📝 Zgłoś potrzebę / brak materiału")
@@ -1638,7 +1640,7 @@ elif menu == "1a. Centrum Komunikacji":
                 task_c = next((g for g in all_comments_grouped if g['task_id'] == sel), None)
                 if task_c:
                     render_whatsapp_chat(task_c['comments'], "Inwestor", task_c['task_name'])
-                    render_chat_input(sel, "Inwestor")
+                    render_chat_input(sel, "Inwestor", key_prefix="comm_inv")
 
 elif menu == "2. Start remontu":
     st.title("🚀 Kreator Startowy (Cloud)")
