@@ -27,7 +27,8 @@ def read_table(table_name, select="*", filters=None, order_by=None):
     if filters:
         for k, v in filters.items():
             query = query.eq(k, v)
-    query = query.eq('is_deleted', False)
+    # Filtr is_deleted stosujemy tylko tam, gdzie jest potrzebny (np. task_comments, expenses)
+    # Dla ogólnej funkcji usuwamy wymuszenie, by nie sypało błędami w nowych tabelach.
     if order_by:
         query = query.order(order_by[0], desc=order_by[1])
     res = query.execute()
