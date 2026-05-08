@@ -346,6 +346,35 @@ def calculate_budget_forecast():
     except Exception:
         return None
 
+def get_activity_banner(role):
+    """Pobierz zdarzenia od ostatniej wizyty dla danej roli."""
+    try:
+        last_visit = st.session_state.get("last_visit")
+        query = supabase.table("activity_log").select("*").order("created_at", desc=True).limit(10)
+        if role == "investor":
+            query = query.in_("visible_to", ["investor", "both"])
+        else:
+            query = query.in_("visible_to", ["crew", "both"])
+        events = query.execute().data or []
+        if last_visit:
+            events = [e for e in events if e["created_at"] > last_visit]
+        return events
+    except Exception:
+        return []
+
+EVENT_ICONS = {
+    "task_started":           ("🟧", "crew"),
+    "inspection_submitted":   ("🔔", "investor"),
+    "inspection_approved":    ("✅", "crew"),
+    "inspection_rework":      ("❌", "crew"),
+    "blocker_reported":       ("🔴", "investor"),
+    "request_confirmed":      ("🟡", "crew"),
+    "request_delivered":      ("📦", "crew"),
+    "request_cancelled":      ("⬜", "crew"),
+    "task_completed":         ("✅", "investor"),
+    "comment_added":          ("💬", "both"),
+}
+
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
 # ==========================================
