@@ -660,13 +660,16 @@ if st.session_state["role"] == "crew":
                         showlegend=False,
                     ))
 
-                # Linia DZISIAJ
-                fig.add_vline(
-                    x=today_str, line_width=2, line_dash="dash",
-                    line_color="#fc8181",
-                    annotation_text="DZISIAJ",
-                    annotation_font_color="#fc8181",
-                    annotation_position="top",
+                # Linia DZISIAJ (Metoda bezpieczna)
+                fig.add_shape(
+                    type="line", x0=today_str, x1=today_str,
+                    y0=0, y1=1, yref="paper",
+                    line=dict(color="#fc8181", width=2, dash="dash")
+                )
+                fig.add_annotation(
+                    x=today_str, y=1, yref="paper",
+                    text="DZISIAJ", showarrow=False,
+                    font=dict(color="#fc8181"), yshift=10
                 )
 
                 fig.update_layout(
