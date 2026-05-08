@@ -699,7 +699,7 @@ def render_whatsapp_chat(comments, current_user, task_id, context="chat"):
         </div>
         """, unsafe_allow_html=True)
         if c.get('image_url'):
-            st.image(c['image_url'], use_container_width=True)
+            st.image(c['image_url'], width="stretch")
             
         if is_me:
             c_edit, c_del, _ = st.columns([1, 1, 8])
@@ -722,7 +722,7 @@ def render_chat_input(task_id, current_user, context="input"):
         c1, c2, c3 = st.columns([3, 1, 0.8])
         msg = c1.text_input("Wiadomość", placeholder="Napisz...", label_visibility="collapsed", key=generate_unique_key(task_id, context, "msg"))
         up = c2.file_uploader("📸", type=["jpg", "png"], label_visibility="collapsed", key=generate_unique_key(task_id, context, "up"))
-        if c3.button("➤", key=generate_unique_key(task_id, context, "btn"), type="primary", use_container_width=True):
+        if c3.button("➤", key=generate_unique_key(task_id, context, "btn"), type="primary", width="stretch"):
             if msg.strip():
                 url = None
                 if up:
