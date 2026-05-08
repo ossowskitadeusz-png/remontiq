@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta, datetime
+import hashlib
+import time
+from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
@@ -419,9 +422,8 @@ def render_comment_section(task_id, role):
     user_name = "Karol" if role == "crew" else "Inwestor"
     
     with st.expander(f"💬 Chat ({len(comments)})"):
-        render_whatsapp_chat(comments, user_name)
-        # Używamy prefiksu 'kanban', bo to wywołanie z widoku tablicy/listy zadań
-        render_chat_input(task_id, user_name, key_prefix="kanban")
+        render_whatsapp_chat(comments, user_name, task_id, context="kanban")
+        render_chat_input(task_id, user_name, context="kanban")
 
 def calculate_budget_forecast():
     """Oblicz prognozę wyczerpania budżetu."""
@@ -614,15 +616,17 @@ def get_comments_with_photos(task_id):
     except Exception: return []
 
 # ============================================
-# SPRINT 12: WHATSAPP-STYLE CHAT
+# SPRINT 14: CHAT UPGRADE (Backend)
 # ============================================
 
+LAST_SYNC_TIME = {} 
+
 def get_all_comments_grouped():
-    """Pobiera wszystkie komentarze pogrupowane po zadaniach."""
+    """Pobiera wszystkie aktywne komentarze pogrupowane po zadaniach."""
     try:
         t_r = supabase.table("tasks").select("id, name").execute()
         tasks = {t['id']: t['name'] for t in (t_r.data or [])}
-        c_r = supabase.table("task_comments").select("*").order("created_at").execute()
+        c_r = supabase.table("task_comments").select("*").eq("is_deleted", False).order("created_at").execute()
         comments = c_r.data or []
         grouped = {}
         for c in comments:
@@ -633,42 +637,92 @@ def get_all_comments_grouped():
         return list(grouped.values())
     except Exception: return []
 
-def render_whatsapp_chat(comments, current_user, task_name=""):
-    """Renderuje chat w stylu WhatsApp."""
-    if task_name: st.markdown(f"#### 💬 {task_name}")
-    st.divider()
-    for c in comments:
+def generate_unique_key(task_id, context, element_type):
+    """Generuje unikalny klucz hash dla elementu UI."""
+    combined = f"{task_id}_{context}_{element_type}_{datetime.now().strftime('%M%S')}"
+    return hashlib.md5(combined.encode()).hexdigest()[:12]
+
+def should_refresh_comments(task_id, interval=5):
+    """Sprawdza czy czas na auto-odświeżanie."""
+    if task_id not in LAST_SYNC_TIME:
+        LAST_SYNC_TIME[task_id] = datetime.now()
+        return True
+    if (datetime.now() - LAST_SYNC_TIME[task_id]).total_seconds() >= interval:
+        LAST_SYNC_TIME[task_id] = datetime.now()
+        return True
+    return False
+
+def edit_comment(comment_id, new_content, edited_by):
+    """Edytuje komentarz z zachowaniem wersji."""
+    try:
+        old = supabase.table("task_comments").select("*").eq("id", comment_id).execute().data[0]
+        orig = old.get('original_content') or old.get('content')
+        count = (old.get('edit_count') or 0) + 1
+        supabase.table("task_comments").update({
+            "content": new_content, "original_content": orig,
+            "edited_at": datetime.now().isoformat(), "edit_count": count,
+            "last_sync": datetime.now().isoformat()
+        }).eq("id", comment_id).execute()
+        return True
+    except Exception: return False
+
+def delete_comment(comment_id):
+    """Soft-delete komentarza."""
+    try:
+        supabase.table("task_comments").update({
+            "is_deleted": True, "edited_at": datetime.now().isoformat(),
+            "last_sync": datetime.now().isoformat()
+        }).eq("id", comment_id).execute()
+        return True
+    except Exception: return False
+
+def render_whatsapp_chat(comments, current_user, task_id, context="chat"):
+    """WhatsApp-style chat z edycją i usuwaniem."""
+    for idx, c in enumerate(comments):
+        if c.get('is_deleted'): continue
         author = c.get('author_name', 'Nieznany')
         is_me = (author == current_user)
-        # Stylistyka baniek
         bg = "#e0e0e0" if is_me else "#0084ff"
         txt = "#000" if is_me else "#fff"
         align = "flex-end" if is_me else "flex-start"
         margin = "30%" if is_me else "0"
-        
         ts = c.get('created_at', '')[11:16]
+        edit_tag = f" (edytowane {c['edit_count']}x)" if c.get('edit_count', 0) > 0 else ""
+        
         st.markdown(f"""
         <div style="display: flex; justify-content: {align}; margin-bottom: 8px; margin-left: {margin};">
-            <div style="background-color: {bg}; color: {txt}; padding: 12px 16px; border-radius: 18px; 
-                        max-width: 85%; font-size: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
-                        line-height: 1.4;">
-                <div style="font-size: 11px; font-weight: bold; margin-bottom: 4px; opacity: 0.8;">{author}</div>
+            <div style="background-color: {bg}; color: {txt}; padding: 12px 16px; border-radius: 18px; max-width: 85%; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                <div style="font-size: 11px; font-weight: bold; opacity: 0.8;">{author}</div>
                 {c.get('content', '')}
-                <div style="font-size: 10px; opacity: 0.6; text-align: right; margin-top: 4px;">{ts}</div>
+                <div style="font-size: 10px; opacity: 0.6; text-align: right;">{ts}{edit_tag}</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
         if c.get('image_url'):
-            st.image(c['image_url'], use_container_width=True, caption=f"📸 {author}")
+            st.image(c['image_url'], use_container_width=True)
+            
+        if is_me:
+            c_edit, c_del, _ = st.columns([1, 1, 8])
+            if c_edit.button("✏️", key=generate_unique_key(task_id, context, f"edit_{idx}")):
+                st.session_state[f"edit_mode_{c['id']}"] = True
+            if c_del.button("🗑️", key=generate_unique_key(task_id, context, f"del_{idx}")):
+                if delete_comment(c['id']): st.rerun()
+                
+            if st.session_state.get(f"edit_mode_{c['id']}"):
+                with st.expander("Edytuj wiadomość", expanded=True):
+                    new_val = st.text_area("Treść", value=c['content'], key=generate_unique_key(task_id, context, f"area_{idx}"))
+                    if st.button("Zapisz", key=generate_unique_key(task_id, context, f"save_{idx}")):
+                        if edit_comment(c['id'], new_val, current_user):
+                            st.session_state[f"edit_mode_{c['id']}"] = False
+                            st.rerun()
 
-def render_chat_input(task_id, current_user, key_prefix="chat"):
-    """Input box jak w WhatsAppie z unikalnym kluczem."""
+def render_chat_input(task_id, current_user, context="input"):
+    """Input box z unikalnymi kluczami hash."""
     with st.container():
         c1, c2, c3 = st.columns([3, 1, 0.8])
-        # Klucze są teraz unikalne dzięki key_prefix
-        msg = c1.text_input("Wiadomość", placeholder="Napisz...", label_visibility="collapsed", key=f"{key_prefix}_in_{task_id}")
-        up = c2.file_uploader("📸", type=["jpg", "png"], label_visibility="collapsed", key=f"{key_prefix}_up_{task_id}")
-        if c3.button("➤", key=f"{key_prefix}_send_{task_id}", type="primary", use_container_width=True):
+        msg = c1.text_input("Wiadomość", placeholder="Napisz...", label_visibility="collapsed", key=generate_unique_key(task_id, context, "msg"))
+        up = c2.file_uploader("📸", type=["jpg", "png"], label_visibility="collapsed", key=generate_unique_key(task_id, context, "up"))
+        if c3.button("➤", key=generate_unique_key(task_id, context, "btn"), type="primary", use_container_width=True):
             if msg.strip():
                 url = None
                 if up:
@@ -1209,8 +1263,20 @@ if st.session_state["role"] == "crew":
 
     with tab_comm:
         st.title("💬 Centrum Komunikacji")
-        all_comments_grouped = get_all_comments_grouped()
         
+        # --- REAL-TIME POLLING (Sprint 14) ---
+        sel_chat = st.session_state.get("selected_chat_crew", "GLOBAL")
+        if sel_chat != "GLOBAL":
+            ref_status = st.empty()
+            if should_refresh_comments(sel_chat, interval=7):
+                ref_status.info("🔄 Synchronizacja...")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                elapsed = (datetime.now() - LAST_SYNC_TIME.get(sel_chat, datetime.now())).total_seconds()
+                ref_status.caption(f"⏱️ Odświeżanie za {int(7 - elapsed)}s")
+
+        all_comments_grouped = get_all_comments_grouped()
         if not all_comments_grouped:
             st.info("📭 Brak komentarzy.")
         else:
@@ -1221,22 +1287,22 @@ if st.session_state["role"] == "crew":
                     st.session_state.selected_chat_crew = "GLOBAL"
                 st.divider()
                 for group in all_comments_grouped:
-                    if st.button(f"📌 {group['task_name']} ({len(group['comments'])})", use_container_width=True, key=f"crew_chat_{group['task_id']}"):
+                    count = len([c for c in group['comments'] if not c.get('is_deleted')])
+                    if st.button(f"📌 {group['task_name']} ({count})", use_container_width=True, key=f"crew_chat_{group['task_id']}"):
                         st.session_state.selected_chat_crew = group['task_id']
             
             with col_chat:
-                sel = st.session_state.get("selected_chat_crew", "GLOBAL")
-                if sel == "GLOBAL":
+                if sel_chat == "GLOBAL":
                     all_c = []
                     for g in all_comments_grouped: all_c.extend(g['comments'])
                     all_c.sort(key=lambda x: x.get('created_at', ''))
-                    render_whatsapp_chat(all_c, "Karol", "Wszystkie wiadomości")
-                    st.info("💡 Wybierz zadanie z listy po lewej, aby odpowiedzieć.")
+                    render_whatsapp_chat(all_c, "Karol", "GLOBAL", context="comm_crew_global")
+                    st.info("💡 Wybierz zadanie, aby odpowiedzieć.")
                 else:
-                    task_c = next((g for g in all_comments_grouped if g['task_id'] == sel), None)
+                    task_c = next((g for g in all_comments_grouped if g['task_id'] == sel_chat), None)
                     if task_c:
-                        render_whatsapp_chat(task_c['comments'], "Karol", task_c['task_name'])
-                        render_chat_input(sel, "Karol", key_prefix="comm_crew")
+                        render_whatsapp_chat(task_c['comments'], "Karol", sel_chat, context="comm_crew_task")
+                        render_chat_input(sel_chat, "Karol", context="comm_crew_task")
 
     with tab_rep:
         st.subheader("📝 Zgłoś potrzebę / brak materiału")
@@ -1613,8 +1679,20 @@ elif menu == "1. Dashboard (Centrum)":
 
 elif menu == "1a. Centrum Komunikacji":
     st.title("💬 Centrum Komunikacji")
-    all_comments_grouped = get_all_comments_grouped()
     
+    # --- REAL-TIME POLLING (Sprint 14) ---
+    sel_chat = st.session_state.get("selected_chat", "GLOBAL")
+    if sel_chat != "GLOBAL":
+        ref_status = st.empty()
+        if should_refresh_comments(sel_chat, interval=7):
+            ref_status.info("🔄 Synchronizacja...")
+            time.sleep(0.5)
+            st.rerun()
+        else:
+            elapsed = (datetime.now() - LAST_SYNC_TIME.get(sel_chat, datetime.now())).total_seconds()
+            ref_status.caption(f"⏱️ Odświeżanie za {int(7 - elapsed)}s")
+
+    all_comments_grouped = get_all_comments_grouped()
     if not all_comments_grouped:
         st.info("📭 Brak komentarzy.")
     else:
@@ -1625,22 +1703,22 @@ elif menu == "1a. Centrum Komunikacji":
                 st.session_state.selected_chat = "GLOBAL"
             st.divider()
             for group in all_comments_grouped:
-                if st.button(f"📌 {group['task_name']} ({len(group['comments'])})", use_container_width=True, key=f"inv_chat_{group['task_id']}"):
+                count = len([c for c in group['comments'] if not c.get('is_deleted')])
+                if st.button(f"📌 {group['task_name']} ({count})", use_container_width=True, key=f"inv_chat_{group['task_id']}"):
                     st.session_state.selected_chat = group['task_id']
         
         with col_chat:
-            sel = st.session_state.get("selected_chat", "GLOBAL")
-            if sel == "GLOBAL":
+            if sel_chat == "GLOBAL":
                 all_c = []
                 for g in all_comments_grouped: all_c.extend(g['comments'])
                 all_c.sort(key=lambda x: x.get('created_at', ''))
-                render_whatsapp_chat(all_c, "Inwestor", "Wszystkie wiadomości")
-                st.info("💡 Wybierz zadanie z listy po lewej, aby odpowiedzieć.")
+                render_whatsapp_chat(all_c, "Inwestor", "GLOBAL", context="center_global")
+                st.info("💡 Wybierz zadanie, aby odpowiedzieć.")
             else:
-                task_c = next((g for g in all_comments_grouped if g['task_id'] == sel), None)
+                task_c = next((g for g in all_comments_grouped if g['task_id'] == sel_chat), None)
                 if task_c:
-                    render_whatsapp_chat(task_c['comments'], "Inwestor", task_c['task_name'])
-                    render_chat_input(sel, "Inwestor", key_prefix="comm_inv")
+                    render_whatsapp_chat(task_c['comments'], "Inwestor", sel_chat, context="center_task")
+                    render_chat_input(sel_chat, "Inwestor", context="center_task")
 
 elif menu == "2. Start remontu":
     st.title("🚀 Kreator Startowy (Cloud)")
