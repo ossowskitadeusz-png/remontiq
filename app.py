@@ -1977,72 +1977,17 @@ elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
         st.divider()
         st.subheader("Przekształć w zadanie (Genialny Workflow)")
         st.caption("Masz problem, który chcesz zamienić na zadanie do wykonania? Połączmy je.")
-        
-        # Filtrujemy tylko otwarte ryzyka
-        open_iss = df_iss[~df_iss['status'].isin(['Przekształcone w zadanie', 'Rozwiązane'])]
-        if not open_iss.empty:
-            sel_iss_id = st.selectbox("Wybierz problem", open_iss['id'].tolist(), format_func=lambda x: open_iss[open_iss['id']==x]['title'].iloc[0])
-            iss_title = open_iss[open_iss['id']==sel_iss_id]['title'].iloc[0]
-            if st.button("🛠️ Utwórz Zadanie i ukryj Problem"):
-                # 1. Tworzymy zadanie
-                new_task = supabase.table("tasks").insert({"name": f"[Z Ryzyka] {iss_title}", "status": "Backlog"}).execute()
-                # 2. Aktualizujemy problem
-                supabase.table("issues").update({
-                    "status": "Przekształcone w zadanie", 
-                    "assigned_to_task_id": new_task.data[0]['id']
-                }).eq("id", sel_iss_id).execute()
-                st.success("Przeniesiono do zadań! Problem znika z pierwszego miejsca Dashboardu (brak duplikacji alertów).")
-                st.rerun()
-        else:
-            st.info("Brak otwartych problemów do przekształcenia w zadanie.")
-    else: st.info("Brak wpisanych problemów.")
 
-elif menu == "9. Dziennik":
-    st.title("📖 Dziennik Remontu")
-    st.write("Chronologiczna historia i komunikaty od ekipy.")
-    
-    with st.form("new_log"):
-        l_content = st.text_area("Treść notatki z dnia dzisiejszego:")
-        if st.form_submit_button("Dodaj do dziennika"):
-            if l_content.strip():
-                supabase.table("daily_logs").insert({
-                    "content": l_content.strip(), 
-                    "author_role": "investor", 
-                    "date": str(date.today())
-                }).execute()
-                st.success("Wpis dodany!")
-                st.rerun()
-            else: st.error("Wpisz treść.")
-            
-    st.divider()
-    df_logs = read_table("daily_logs", order_by=("created_at", False)) # Sortowanie malejące
-    if not df_logs.empty:
-        for _, row in df_logs.iterrows():
-            if row['author_role'] == 'crew':
-                icon = "👷 **[EKIPA] Raport z prac**"
-                bg = "success"
-            else:
-                icon = "👤 **[TY] Notatka**"
-                bg = "info"
-            
-            st.markdown(f"#### {row['date']} | {icon}")
-            if bg == "info":
-                st.info(row['content'])
-            else:
-                st.success(row['content'])
-            st.markdown("---")
-    else: st.info("Brak wpisów w Dzienniku.")
-
-elif menu == "10. Ustawienia":
+elif menu == "8. Ustawienia":
     st.title("⚙️ Ustawienia i Eksport")
     
-    st.subheader("Pomieszczenia w projekcie")
-    df_r = read_table("rooms", select="id, name, budget")
+    st.subheader("🏠 Zarządzanie Pomieszczeniami")
+    df_r = read_table("rooms")
     if not df_r.empty:
-        edited_r = st.data_editor(df_r, disabled=["id"], hide_index=True)
-        if st.button("Zapisz pomieszczenia"):
+        edited_r = st.data_editor(df_r[['id', 'name']], disabled=["id"], hide_index=True, width="stretch")
+        if st.button("Zapisz zmiany w nazwach"):
             for _, row in edited_r.iterrows():
-                supabase.table("rooms").update({"name": row['name'], "budget": row['budget']}).eq("id", row['id']).execute()
+                supabase.table("rooms").update({"name": row['name']}).eq("id", row['id']).execute()
             st.rerun()
             
     st.divider()
