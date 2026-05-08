@@ -271,35 +271,80 @@ def log_activity(event_type, description, created_by, visible_to="both", task_id
             payload["task_id"] = str(task_id)
         supabase.table("activity_log").insert(payload).execute()
     except Exception:
-        pass  # Logowanie nie może crashować aplikacji
+        pass
 
-def get_activity_banner(role):
-    """Pobierz zdarzenia od ostatniej wizyty dla danej roli."""
+def add_comment(task_id, author_name, author_role, content):
+    """Dodaj komentarz i zaloguj aktywność."""
+    if not content.strip(): return
     try:
-        last_visit = st.session_state.get("last_visit")
-        query = supabase.table("activity_log").select("*").order("created_at", desc=True).limit(10)
-        if role == "investor":
-            query = query.in_("visible_to", ["investor", "both"])
-        else:
-            query = query.in_("visible_to", ["crew", "both"])
-        events = query.execute().data or []
-        if last_visit:
-            events = [e for e in events if e["created_at"] > last_visit]
-        return events
+        payload = {
+            "task_id": str(task_id),
+            "author_name": author_name,
+            "author_role": author_role,
+            "content": content
+        }
+        supabase.table("task_comments").insert(payload).execute()
+        # Powiadom drugą stronę
+        visible_to = "investor" if author_role == "crew" else "crew"
+        task_name = (supabase.table("tasks").select("name").eq("id", task_id).execute().data or [{}])[0].get("name", "?")
+        log_activity("comment_added", f"💬 {author_name} do {task_name}: {content[:50]}...", author_name, visible_to, task_id)
+    except Exception:
+        pass
+
+def get_comments(task_id):
+    """Pobierz historię komentarzy dla zadania."""
+    try:
+        return supabase.table("task_comments").select("*").eq("task_id", task_id).order("created_at", desc=False).execute().data or []
     except Exception:
         return []
 
-EVENT_ICONS = {
-    "task_started":           ("🟧", "crew"),
-    "inspection_submitted":   ("🔔", "investor"),
-    "inspection_approved":    ("✅", "crew"),
-    "inspection_rework":      ("❌", "crew"),
-    "blocker_reported":       ("🔴", "investor"),
-    "request_confirmed":      ("🟡", "crew"),
-    "request_delivered":      ("📦", "crew"),
-    "request_cancelled":      ("⬜", "crew"),
-    "task_completed":         ("✅", "investor"),
-}
+def render_comment_section(task_id, role):
+    """Wyświetla czat wewnątrz expandera."""
+    comments = get_comments(task_id)
+    user_name = "Karol" if role == "crew" else "Inwestor"
+    
+    with st.expander(f"💬 Komentarze ({len(comments)})"):
+        for c in comments:
+            with st.chat_message("assistant" if c['author_role'] == 'investor' else "user"):
+                st.write(f"**{c['author_name']}** ({str(c['created_at'])[11:16]})")
+                st.write(c['content'])
+        
+        with st.form(f"comment_form_{task_id}", clear_on_submit=True):
+            new_c = st.text_input("Napisz wiadomość...", key=f"input_{task_id}")
+            if st.form_submit_button("Wyślij"):
+                add_comment(task_id, user_name, role, new_c)
+                st.rerun()
+
+def calculate_budget_forecast():
+    """Oblicz prognozę wyczerpania budżetu."""
+    try:
+        meta = get_project_metadata()
+        if not meta or not meta.get('planned_start_date'): return None
+        
+        total_budget = meta.get('total_budget', 0)
+        expenses_df = read_table("expenses")
+        spent = expenses_df['amount'].sum() if not expenses_df.empty else 0
+        
+        start_date = datetime.strptime(meta['planned_start_date'], "%Y-%m-%d").date()
+        days_passed = (date.today() - start_date).days
+        
+        daily_burn = spent / max(1, days_passed)
+        remaining = total_budget - spent
+        days_left = int(remaining / daily_burn) if daily_burn > 0 else 999
+        
+        forecast_date = date.today() + timedelta(days=days_left)
+        
+        status = "🟢 OK"
+        if days_left < 14: status = "🔴 KRITYCZNIE"
+        elif days_left < 30: status = "🟡 OSTRZEŻENIE"
+        
+        return {
+            "total": total_budget, "spent": spent, "remaining": remaining,
+            "daily_burn": int(daily_burn), "days_until_depleted": days_left,
+            "forecast_date": forecast_date, "status": status
+        }
+    except Exception:
+        return None
 
 # ==========================================
 # 2. SCORING ENGINE (V3.0 - Sprint 4)
@@ -542,18 +587,28 @@ if st.session_state["role"] is None:
 
 def render_activity_banner(role):
     """Pokaż baner z nowymi zdarzeniami od ostatniej wizyty."""
+    import time
     events = get_activity_banner(role)
     if not events:
         return
+    
+    # Session state do ukrywania bannera po czasie
+    if "banner_visible_until" not in st.session_state:
+        st.session_state["banner_visible_until"] = time.time() + 10 # 10 sekund
+
+    if time.time() > st.session_state["banner_visible_until"]:
+        return
+
     items_html = ""
     for e in events[:5]:
         icon = EVENT_ICONS.get(e["event_type"], ("\u2139\ufe0f", "both"))[0]
         ts = str(e.get("created_at", ""))[:16].replace("T", " ")
         items_html += f'<div class="activity-item">{icon} {e["description"]} <span style="color:#718096;font-size:11px">({ts})</span></div>'
+    
     st.markdown(f"""
     <div class="activity-banner">
         <div style="font-weight:700;color:#90cdf4;margin-bottom:6px">
-            🔔 Nowe zdarzenia od ostatniej wizyty ({len(events)})
+            🔔 Nowe zdarzenia ({len(events)})
         </div>
         {items_html}
     </div>""", unsafe_allow_html=True)
@@ -708,6 +763,7 @@ if st.session_state["role"] == "crew":
                 with st.container(border=True):
                     st.markdown(f"**{task['name']}**")
                     st.caption(f"Start: {task['planned_start_date']}")
+                    render_comment_section(task['id'], "crew")
                     if st.button("▶️ ROZPOCZNIJ", key=f"start_{task['id']}", use_container_width=True):
                         start_task(task['id'])
                         st.rerun()
@@ -720,6 +776,7 @@ if st.session_state["role"] == "crew":
                     st.markdown(f"**{task['name']}**")
                     if blocked: st.markdown("<span class='blocker-badge'>🔴 ZABLOKOWANE</span>", unsafe_allow_html=True)
                     st.caption(f"Do: {task['planned_end_date']}")
+                    render_comment_section(task['id'], "crew")
                     if blocked:
                         st.warning(f"⛔ {task.get('blocker_reason')}")
                     else:
@@ -1019,7 +1076,13 @@ elif menu == "1. Dashboard (Centrum)":
 
         p1, p2, p3, p4 = st.columns(4)
         p1.metric(f"{prog_emoji} Postęp zadań", f"{prog_pct}%", f"{done_t}/{total_t} zad.")
-        p2.metric(f"{budget_emoji} Budżet", f"{budget_pct}%", f"{spent:,.0f} / {total_budget:,.0f} zł")
+        
+        forecast = calculate_budget_forecast()
+        if forecast:
+            p2.metric(f"💰 Zdrowie Portfela", f"{forecast['spent']:,.0f} zł", delta=forecast['status'])
+        else:
+            p2.metric(f"{budget_emoji} Budżet", f"{budget_pct}%", f"{spent:,.0f} / {total_budget:,.0f} zł")
+            
         p3.metric(f"{blocker_emoji} Blokery", len(blocked_tasks), "zadań zatrzymanych")
         p4.metric(f"{risk_emoji} Ryzyka", len(risks_data), f"{len(critical_risks)} krytycznych")
     else:
@@ -1042,6 +1105,7 @@ elif menu == "1. Dashboard (Centrum)":
                 h2.warning("⏳ Czeka")
                 if insp.get("submission_notes"):
                     st.info(f"📝 Karol: {insp['submission_notes']}")
+                render_comment_section(insp['task_id'], "investor")
                 ba, bb = st.columns(2)
                 if ba.button("✅ ZATWIERDŹ", key=f"cc_appr_{insp['id']}", use_container_width=True, type="primary"):
                     approve_inspection(insp["id"])
@@ -1193,6 +1257,18 @@ elif menu == "6. Wydatki (Finanse)":
     st.title("💰 Wydatki (Supabase Sync)")
     df_mats_options = read_table("materials", select="id, name, unit")
     
+    # --- BUDGET HEALTH WIDGET (Sprint 8) ---
+    forecast = calculate_budget_forecast()
+    if forecast:
+        with st.container(border=True):
+            f1, f2, f3 = st.columns(3)
+            f1.markdown(f"### {forecast['status']}\n**Pozostało: {forecast['remaining']:,.0f} zł**")
+            f2.markdown(f"**Tempo:** {forecast['daily_burn']} zł/dzień\n**Koniec środków:** {forecast['forecast_date']}")
+            if forecast['days_until_depleted'] < 30:
+                f3.warning(f"⚠️ Środki wyczerpią się za {forecast['days_until_depleted']} dni!")
+            else:
+                f3.success(f"✅ Budżet bezpieczny ({forecast['days_until_depleted']} dni)")
+    st.divider()
     with st.expander("➕ Dodaj wydatek", expanded=True):
         with st.form("new_expense", clear_on_submit=True):
             e_desc = st.text_input("Opis (np. Płytki z Castoramy) *")
