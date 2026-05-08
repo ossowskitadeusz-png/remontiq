@@ -298,6 +298,73 @@ def get_comments(task_id):
     except Exception:
         return []
 
+# ============================================
+# SPRINT 9: SORTOWANIE ZADAŃ (Backend)
+# ============================================
+
+def get_tasks_ordered():
+    """Pobiera wszystkie zadania posortowane po position_in_queue"""
+    try:
+        response = supabase.table("tasks").select("*").order("position_in_queue").execute()
+        tasks = response.data or []
+        for task in tasks:
+            if task.get('room_id'):
+                room_r = supabase.table("rooms").select("name").eq("id", task['room_id']).execute()
+                task['room_name'] = room_r.data[0]['name'] if room_r.data else "—"
+            else:
+                task['room_name'] = "—"
+        return tasks
+    except Exception:
+        return []
+
+def move_task_up(task_id):
+    """Przesuwa zadanie wyżej (zmniejsza position_in_queue)"""
+    try:
+        task_r = supabase.table("tasks").select("position_in_queue").eq("id", task_id).execute()
+        if not task_r.data: return False
+        curr = task_r.data[0]['position_in_queue']
+        prev_r = supabase.table("tasks").select("id").eq("position_in_queue", curr - 1).execute()
+        if not prev_r.data: return False
+        prev_id = prev_r.data[0]['id']
+        supabase.table("tasks").update({"position_in_queue": curr - 1}).eq("id", task_id).execute()
+        supabase.table("tasks").update({"position_in_queue": curr}).eq("id", prev_id).execute()
+        return True
+    except Exception: return False
+
+def move_task_down(task_id):
+    """Przesuwa zadanie niżej (zwiększa position_in_queue)"""
+    try:
+        task_r = supabase.table("tasks").select("position_in_queue").eq("id", task_id).execute()
+        if not task_r.data: return False
+        curr = task_r.data[0]['position_in_queue']
+        next_r = supabase.table("tasks").select("id").eq("position_in_queue", curr + 1).execute()
+        if not next_r.data: return False
+        nxt_id = next_r.data[0]['id']
+        supabase.table("tasks").update({"position_in_queue": curr + 1}).eq("id", task_id).execute()
+        supabase.table("tasks").update({"position_in_queue": curr}).eq("id", nxt_id).execute()
+        return True
+    except Exception: return False
+
+def get_filtered_comments(task_name=None, author_role=None, order="newest_first"):
+    """Pobiera komentarze z filtracją i kontekstem zadania."""
+    try:
+        comments = supabase.table("task_comments").select("*").execute().data or []
+        for c in comments:
+            t_r = supabase.table("tasks").select("name, room_id").eq("id", c['task_id']).execute()
+            if t_r.data:
+                c['task_name'] = t_r.data[0]['name']
+                if t_r.data[0].get('room_id'):
+                    r_r = supabase.table("rooms").select("name").eq("id", t_r.data[0]['room_id']).execute()
+                    c['room_name'] = r_r.data[0]['name'] if r_r.data else "—"
+                else: c['room_name'] = "—"
+            else:
+                c['task_name'], c['room_name'] = "Nieznane", "—"
+        if task_name: comments = [c for c in comments if c['task_name'] == task_name]
+        if author_role: comments = [c for c in comments if c['author_role'] == author_role]
+        rev = True if order == "newest_first" else False
+        return sorted(comments, key=lambda x: x['created_at'], reverse=rev)
+    except Exception: return []
+
 def render_comment_section(task_id, role):
     """Wyświetla czat wewnątrz expandera."""
     comments = get_comments(task_id)
@@ -345,6 +412,90 @@ def calculate_budget_forecast():
         }
     except Exception:
         return None
+
+def calculate_health_score():
+    """Oblicza Health Score projektu (średnia ważona 35/25/25/15)."""
+    try:
+        # 1. POSTĘP (35%)
+        tasks = supabase.table("tasks").select("kanban_status, planned_end_date").execute().data or []
+        if not tasks: return {"score": 0, "status": "⚪ BRAK DANYCH", "metrics": {}, "details": {}}
+        
+        comp_count = len([t for t in tasks if t.get('kanban_status') == 'COMPLETED'])
+        prog_score = (comp_count / len(tasks)) * 100
+        
+        # 2. HARMONOGRAM (25%)
+        today = date.today()
+        delays = []
+        for t in tasks:
+            if t.get('planned_end_date'):
+                p_end = datetime.strptime(t['planned_end_date'], "%Y-%m-%d").date()
+                if t['kanban_status'] != 'COMPLETED' and p_end < today:
+                    delays.append((today - p_end).days)
+        avg_delay = sum(delays)/len(delays) if delays else 0
+        sched_score = 100 if avg_delay == 0 else (75 if avg_delay <= 3 else (50 if avg_delay <= 7 else 25))
+        
+        # 3. BUDŻET (25%)
+        meta = get_project_metadata()
+        total_b = meta.get('total_budget', 0) if meta else 0
+        exp_df = read_table("expenses")
+        spent = exp_df['amount'].sum() if not exp_df.empty else 0
+        
+        if total_b > 0:
+            b_pct = (spent / total_b) * 100
+            budg_score = 100 if b_pct <= 80 else (75 if b_pct <= 95 else (50 if b_pct <= 110 else 0))
+        else: b_pct, budg_score = 0, 100
+        
+        # 4. BLOKERY (15%)
+        block_count = len([t for t in tasks if t.get('is_blocked')])
+        block_score = 100 if block_count == 0 else (75 if block_count <= 2 else (50 if block_count <= 5 else 25))
+        
+        final = round((prog_score*0.35) + (sched_score*0.25) + (budg_score*0.25) + (block_score*0.15))
+        status = "🟢 ZDROWY" if final >= 80 else ("🟡 OSTRZEŻENIE" if final >= 60 else "🔴 KRYTYCZNIE")
+        
+        return {
+            "score": final, "status": status,
+            "metrics": {"progress": round(prog_score), "schedule": sched_score, "budget": budg_score, "blockers": block_score},
+            "details": {"completed": comp_count, "total": len(tasks), "delay": round(avg_delay, 1), "spent": spent, "budget": total_b, "pct": round(b_pct, 1), "blockers": block_count}
+        }
+    except Exception: return {"score": 0, "status": "❌ BŁĄD", "metrics": {}, "details": {}}
+
+def get_burn_down_data():
+    """Pobiera dane do wykresu burn-down."""
+    try:
+        meta = get_project_metadata()
+        if not meta or not meta.get('planned_start_date'): return None
+        
+        total_b = meta.get('total_budget', 0)
+        start_d = datetime.strptime(meta['planned_start_date'], "%Y-%m-%d").date()
+        
+        # Planowany koniec z Charteru
+        charter = supabase.table("project_charter").select("planned_end_date").execute().data
+        end_d = datetime.strptime(charter[0]['planned_end_date'], "%Y-%m-%d").date() if charter else start_d + timedelta(days=30)
+        
+        total_days = (end_d - start_d).days
+        exp_df = read_table("expenses")
+        
+        planned_line, actual_line, dates = [], [], []
+        curr_spent = 0
+        
+        for i in range(total_days + 1):
+            curr_d = start_d + timedelta(days=i)
+            dates.append(curr_d.strftime("%d.%m"))
+            
+            # PLAN (liniowy spadek)
+            planned_rem = max(0, total_b - (total_b * (i / total_days))) if total_days > 0 else 0
+            planned_line.append(planned_rem)
+            
+            # REAL (skumulowane wydatki)
+            if not exp_df.empty:
+                day_spent = exp_df[exp_df['date'] == str(curr_d)]['amount'].sum()
+                curr_spent += day_spent
+            
+            if curr_d <= date.today():
+                actual_line.append(max(0, total_b - curr_spent))
+        
+        return {"planned": planned_line, "actual": actual_line, "dates": dates, "total": total_b, "spent": curr_spent}
+    except Exception: return None
 
 def get_activity_banner(role):
     """Pobierz zdarzenia od ostatniej wizyty dla danej roli."""
@@ -698,7 +849,7 @@ if st.session_state["role"] == "crew":
     
     st.divider()
     
-    tab_kanban, tab_plan, tab_rep = st.tabs(["🗂️ Tablica Kanban", "➕ Zaplanuj Zadanie", "📝 Zgłoś / Raport"])
+    tab_kanban, tab_plan, tab_comm, tab_rep = st.tabs(["🗂️ Tablica Kanban", "📅 Manager Harmonogramu", "💬 Centrum Komunikacji", "📝 Zgłoś / Raport"])
 
     with tab_kanban:
         # ===== GANTT CHART =====
@@ -833,19 +984,100 @@ if st.session_state["role"] == "crew":
                     render_comment_section(task['id'], "crew")
 
     with tab_plan:
-        st.subheader("➕ Zaplanuj zadanie")
-        with st.form("new_task_form", clear_on_submit=True):
-            tc1, tc2 = st.columns(2)
-            task_name = tc1.text_input("Nazwa zadania *")
-            task_desc = tc1.text_area("Opis")
-            start_date = tc2.date_input("Start")
-            end_date = tc2.date_input("Koniec")
-            crew_members = st.multiselect("Kto pracuje?", ["Ja (Karol)", "Pomocnik"], default=["Ja (Karol)"])
+        st.markdown("## 📅 Manager Harmonogramu")
+        st.caption("Ustaw kolejność zadań [↑↓], edytuj szczegóły lub dodaj nowe zadanie na końcu.")
+        
+        tasks_ord = get_tasks_ordered()
+        
+        if tasks_ord:
+            for idx, t in enumerate(tasks_ord):
+                col1, col2, col3, col4, col5 = st.columns([0.5, 4, 2, 0.5, 0.5])
+                with col1: st.write(f"#{idx+1}")
+                with col2: st.markdown(f"**{t['name']}** | 📍 {t.get('room_name', '—')}")
+                with col3: st.caption(f"📅 {t.get('planned_start_date', '—')}")
+                with col4:
+                    if st.button("↑", key=f"up_{t['id']}"):
+                        if move_task_up(t['id']): st.rerun()
+                with col5:
+                    if st.button("↓", key=f"down_{t['id']}"):
+                        if move_task_down(t['id']): st.rerun()
+                st.divider()
+
+        # MODAL EDYCJI (Selectbox + Form)
+        st.subheader("✏️ Edytuj lub Dodaj Zadanie")
+        edit_option = st.selectbox("Wybierz zadanie do edycji lub 'NOWE ZADANIE'", 
+                                    ["➕ NOWE ZADANIE"] + [f"{t['name']} (#{idx+1})" for idx, t in enumerate(tasks_ord)])
+        
+        with st.form("task_editor_form", clear_on_submit=True):
+            if edit_option == "➕ NOWE ZADANIE":
+                t_to_edit = {"name": "", "description": "", "planned_start_date": str(date.today()), "planned_end_date": str(date.today()), "room_id": None}
+                st.info("Tworzysz nowe zadanie")
+            else:
+                idx_sel = int(edit_option.split("#")[-1].replace(")", "")) - 1
+                t_to_edit = tasks_ord[idx_sel]
+                st.info(f"Edytujesz: {t_to_edit['name']}")
+
+            name_in = st.text_input("Nazwa zadania *", value=t_to_edit['name'])
+            desc_in = st.text_area("Opis / Notatki", value=t_to_edit.get('description', ''))
             
-            if st.form_submit_button("Dodaj zadanie do tablicy"):
-                create_task_by_crew(task_name, task_desc, start_date, end_date, crew_members)
-                st.success("Dodano!")
-                st.rerun()
+            # Pobierz pokoje
+            rooms_df = read_table("rooms", select="id, name")
+            r_list = [{"id": None, "name": "Brak (Ogólne)"}]
+            for _, r in rooms_df.iterrows(): r_list.append({"id": r['id'], "name": r['name']})
+            
+            curr_r_idx = next((i for i, r in enumerate(r_list) if r['id'] == t_to_edit.get('room_id')), 0)
+            room_in = st.selectbox("Pomieszczenie", options=r_list, format_func=lambda x: x['name'], index=curr_r_idx)
+            
+            c1, c2 = st.columns(2)
+            start_in = c1.date_input("Start", value=datetime.strptime(t_to_edit['planned_start_date'][:10], "%Y-%m-%d") if t_to_edit.get('planned_start_date') else date.today())
+            end_in = c2.date_input("Koniec", value=datetime.strptime(t_to_edit['planned_end_date'][:10], "%Y-%m-%d") if t_to_edit.get('planned_end_date') else date.today())
+
+            if st.form_submit_button("💾 ZAPISZ ZMIANY", type="primary"):
+                if not name_in.strip(): st.error("Nazwa jest wymagana")
+                else:
+                    payload = {
+                        "name": name_in, "description": desc_in, "room_id": room_in['id'],
+                        "planned_start_date": str(start_in), "planned_end_date": str(end_in)
+                    }
+                    if edit_option == "➕ NOWE ZADANIE":
+                        # Nowe zadanie na koniec kolejki
+                        payload["position_in_queue"] = len(tasks_ord) + 1
+                        supabase.table("tasks").insert(payload).execute()
+                    else:
+                        supabase.table("tasks").update(payload).eq("id", t_to_edit['id']).execute()
+                    st.success("Zapisano!")
+                    st.rerun()
+
+    with tab_comm:
+        st.markdown("## 💬 Centrum Komunikacji")
+        st.caption("Wszystkie rozmowy w jednym miejscu. Kliknij 'POKAŻ', aby przejść do zadania.")
+        
+        f_col1, f_col2 = st.columns(2)
+        f_task = f_col1.selectbox("🔍 Filtruj po zadaniu", ["Wszystkie"] + [t['name'] for t in tasks_ord])
+        f_auth = f_col2.selectbox("👤 Autor", ["Wszyscy", "Inwestor", "Ja (Karol)"])
+        
+        role_map = {"Inwestor": "investor", "Ja (Karol)": "crew"}
+        comments = get_filtered_comments(
+            task_name=None if f_task == "Wszystkie" else f_task,
+            author_role=role_map.get(f_auth)
+        )
+        
+        if not comments:
+            st.info("Brak wiadomości spełniających kryteria.")
+        else:
+            for c in comments:
+                with st.container(border=True):
+                    header_col, jump_col = st.columns([4, 1])
+                    with header_col:
+                        auth_icon = "🔵" if c['author_role'] == 'investor' else "🟡"
+                        st.markdown(f"{auth_icon} **{c['author_name']}** | {c['task_name']} | <span style='color:grey'>{c['created_at'][11:16]}</span>", unsafe_allow_html=True)
+                        st.write(f"> {c['content']}")
+                    with jump_col:
+                        if st.button("👁️ POKAŻ", key=f"jump_{c['id']}"):
+                            st.session_state.jump_to_task_id = c['task_id']
+                            # Przełączamy na tablicę Kanban (tab_kanban to index 0)
+                            # W Streamlit nie ma prostego switcha tabów, ale możemy dać info
+                            st.info(f"Zadanie '{c['task_name']}' podświetlone na Kanbanie!")
 
     with tab_rep:
         st.subheader("📝 Zgłoś potrzebę / brak materiału")
@@ -1086,38 +1318,28 @@ elif menu == "1. Dashboard (Centrum)":
     # SEKCJA 2: PULS PROJEKTU
     # ==============================
     st.markdown("## 📊 PULS PROJEKTU")
-
-    if project_meta:
-        total_t = len(all_tasks_data)
-        done_t = len([t for t in all_tasks_data if t.get("kanban_status") == "COMPLETED"])
-        prog_pct = int(done_t / total_t * 100) if total_t > 0 else 0
-        prog_emoji = "🟢" if prog_pct >= 70 else ("🟡" if prog_pct >= 30 else "🔴")
-
-        try:
-            total_budget = float(project_meta.get("total_budget", 0))
-            exp_resp = supabase.table("expenses").select("amount").execute()
-            spent = sum(float(e.get("amount", 0)) for e in (exp_resp.data or []))
-            budget_pct = int(spent / total_budget * 100) if total_budget > 0 else 0
-            budget_emoji = "🟢" if budget_pct < 70 else ("🟡" if budget_pct < 90 else "🔴")
-        except Exception:
-            spent, total_budget, budget_pct, budget_emoji = 0, 0, 0, "🟢"
-
-        blocker_emoji = "🔴" if blocked_tasks else "🟢"
-        risk_emoji = "🔴" if critical_risks else ("🟡" if risks_data else "🟢")
-
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric(f"{prog_emoji} Postęp zadań", f"{prog_pct}%", f"{done_t}/{total_t} zad.")
-        
-        forecast = calculate_budget_forecast()
-        if forecast:
-            p2.metric(f"💰 Zdrowie Portfela", f"{forecast['spent']:,.0f} zł", delta=forecast['status'])
-        else:
-            p2.metric(f"{budget_emoji} Budżet", f"{budget_pct}%", f"{spent:,.0f} / {total_budget:,.0f} zł")
-            
-        p3.metric(f"{blocker_emoji} Blokery", len(blocked_tasks), "zadań zatrzymanych")
-        p4.metric(f"{risk_emoji} Ryzyka", len(risks_data), f"{len(critical_risks)} krytycznych")
-    else:
-        st.info("Utwórz Charter projektu (menu 0) aby widzieć puls.")
+    
+    # --- HEALTH SCORE WIDGET (Sprint 10) ---
+    h = calculate_health_score()
+    col_h1, col_h2 = st.columns([1, 3])
+    with col_h1:
+        st.markdown(f"""
+            <div style="text-align:center; padding:15px; border-radius:10px; background:#1a1f2e; border:1px solid #2d3748">
+                <h3 style="margin:0; color:#a0aec0">HEALTH</h3>
+                <h1 style="margin:0; font-size:40px">{h['score']}%</h1>
+                <p style="margin:0">{h['status']}</p>
+            </div>
+        """, unsafe_allow_html=True)
+    with col_h2:
+        m = h['metrics']
+        d = h['details']
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Postęp", f"{m['progress']}%", f"{d['completed']}/{d['total']}")
+        c2.metric("Terminy", f"{m['schedule']}%", f"-{d['delay']}d")
+        c3.metric("Budżet", f"{m['budget']}%", f"{d['pct']}%")
+        c4.metric("Blokery", f"{m['blockers']}%", f"{d['blockers']} szt")
+    
+    st.divider()
 
     st.divider()
 
@@ -1331,6 +1553,16 @@ elif menu == "6. Wydatki (Finanse)":
                     st.rerun()
 
     st.subheader("📜 Historia Wydatków")
+    
+    # --- BURN-DOWN CHART (Sprint 10) ---
+    bd = get_burn_down_data()
+    if bd:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=bd['dates'], y=bd['planned'], name="Plan", line=dict(color="#2b6cb0", dash="dash")))
+        fig.add_trace(go.Scatter(x=bd['dates'], y=bd['actual'], name="Realizacja", fill="tozeroy", line=dict(color="#48bb78")))
+        fig.update_layout(height=300, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), margin=dict(l=0,r=0,t=20,b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
     df_exp = read_table("expenses")
     if not df_exp.empty:
         if not df_mats_options.empty:
