@@ -1545,35 +1545,44 @@ if st.session_state['role'] == "crew":
                     
                     if st.form_submit_button("Weryfikuj i wyślij do Inwestora"):
                         if t_title and t_price > 0:
-                            # Tagi Handshake 2.0
+                            # Tagi Handshake 2.1 (Zawsze w opisie dla kompatybilności)
                             full_desc = f"--- DANE NEGOCJACYJNE ---\nCOMMERCIAL: PROPOSED_BY_CREW\nEXECUTION: NOT_READY\nCENA: {t_price}\n------------------------\n\n{t_desc}"
                             
-                            # Budujemy paczkę danych - tylko najbezpieczniejsze pola
+                            # Budujemy payload RLS-Compliant
                             payload = {
                                 "name": t_title,
                                 "description": full_desc,
-                                "kanban_status": "BACKLOG"
+                                "kanban_status": "BACKLOG",
+                                "commercial_status": "PROPOSED_BY_CREW",
+                                "execution_status": "NOT_READY"
                             }
                             
-                            # Próbujemy dodać powiązanie z projektem (sprawdzamy obie wersje nazwy)
+                            # KROK KRYTYCZNY: Dodajemy autora dla RLS
+                            u_id = st.session_state.get('user_id')
+                            if u_id:
+                                payload["created_by"] = u_id
+                                payload["user_id"] = u_id # Fallback dla różnych nazw kolumn
+                            
                             if p_id:
                                 payload["project_id"] = p_id
+                                payload["projekt_id"] = p_id
                             
                             try:
+                                # Próba 1: Pełny payload
                                 supabase.table("tasks").insert(payload).execute()
-                                st.success("✅ Wysłano propozycję do Inwestora!")
+                                st.success("✅ Wysłano propozycję!")
                                 time.sleep(1)
                                 st.rerun()
                             except Exception as e:
-                                # Jeśli projekt_id zawiodło, spróbuj projekt_id -> projekt_id (polska nazwa)
+                                # Próba 2: Minimalny payload (jeśli baza nie ma nowych kolumn)
                                 try:
-                                    payload.pop("project_id", None)
-                                    payload["projekt_id"] = p_id
-                                    supabase.table("tasks").insert(payload).execute()
-                                    st.success("✅ Wysłano (auto-fix kolumny projekt_id)!")
+                                    minimal_payload = {"name": t_title, "description": full_desc, "project_id": p_id}
+                                    supabase.table("tasks").insert(minimal_payload).execute()
+                                    st.success("✅ Wysłano (tryb uproszczony)!")
                                     st.rerun()
-                                except:
-                                    st.error(f"Nie udało się zapisać zadania. Sprawdź strukturę tabeli tasks. Błąd: {e}")
+                                except Exception as e2:
+                                    st.error(f"Krytyczny błąd RLS/Schema: {e2}")
+                                    st.info("💡 Sprawdź w Supabase czy masz politykę INSERT dla roli authenticated.")
                         else:
                             st.error("Podaj nazwę i cenę!")
 
