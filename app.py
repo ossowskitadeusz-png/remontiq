@@ -1325,13 +1325,18 @@ render_top_bar(proj_name, role_name, st.session_state.get('user_name', 'Użytkow
 
 # 3. Definicja Menu w Sidebarze (Zależna od Roli)
 if st.session_state['role'] == "crew":
-    menu = st.sidebar.radio("👷 MENU EKIPY", [
-        "1. 👷 Mój Dzień (Zadania)",
-        "2. 💰 Moje Zarobki",
-        "3. 📅 Planowanie Remontu",
-        "4. 🚨 Blokady i Materiały",
-        "5. 💬 Czat Budowy",
-        "6. 🚪 Wyloguj"
+    st.sidebar.markdown("### 🛠️ ZARZĄDZANIE")
+    if st.sidebar.button("📝 PLAN REMONTU", use_container_width=True, type="primary"):
+        st.session_state['crew_menu_active'] = "planowanie"
+        st.rerun()
+    
+    st.sidebar.divider()
+    menu = st.sidebar.radio("👷 NAWIGACJA", [
+        "🚀 Plan na dzisiaj",
+        "💰 Moje Zarobki",
+        "🚨 Blokady i Materiały",
+        "💬 Czat Budowy",
+        "🚪 Wyloguj"
     ])
 else:
     menu = st.sidebar.radio("🏠 MENU INWESTORA", [
@@ -1355,27 +1360,51 @@ if "Wyloguj" in menu:
     logout()
     st.rerun()
 
-# 5. Blokada dla Ekipy (Przekierowanie na widoki Karola)
+# 5. Blokada dla Ekipy (Nowy Workflow)
 if st.session_state['role'] == "crew":
     p_id = project_meta.get('id') if project_meta else None
     
-    if menu == "1. 👷 Mój Dzień (Zadania)":
+    # Obsługa przycisku "Planowanie" z sidebaru
+    if st.session_state.get('crew_menu_active') == "planowanie":
+        st.title("📅 Planowanie Remontu")
+        st.info("Karol, tu układasz harmonogram i fazy.")
+        with st.expander("➕ DODAJ NOWE ZADANIE", expanded=True):
+            with st.form("new_task_plan_form", clear_on_submit=True):
+                t_name = st.text_input("Nazwa zadania")
+                t_diff = st.select_slider("Trudność", options=["EASY", "MEDIUM", "HARD"], value="MEDIUM")
+                if st.form_submit_button("DODAJ"):
+                    st.success("Zadanie dodane")
+        
+        if st.button("⬅️ Powrót do Zadania"):
+            st.session_state['crew_menu_active'] = None
+            st.rerun()
+        st.stop()
+
+    if menu == "🚀 Plan na dzisiaj":
+        if "splash_done" not in st.session_state: st.session_state.splash_done = False
+        if not st.session_state.splash_done:
+            st.markdown(f"""
+            <div style="height: 60vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 30px; color: white; text-align: center; padding: 40px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);">
+                <div style="font-size: 100px; margin-bottom: 20px;">🏗️</div>
+                <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY KAROL!</h1>
+                <p style="font-size: 24px; opacity: 0.8; margin-top: 10px;">Dziś jest {datetime.now().strftime('%A, %d.%m.%Y')}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("🚀 WEJDŹ NA BUDOWĘ", use_container_width=True, type="primary"):
+                st.session_state.splash_done = True
+                st.rerun()
+            st.stop()
+        
         render_crew_dashboard(p_id, "KAROL_ID", "Karol")
-    elif menu == "2. 💰 Moje Zarobki":
+        
+    elif menu == "💰 Moje Zarobki":
         st.title("💰 Moje Zarobki")
         earnings = calculate_weekly_bonus_v2(p_id, "KAROL_ID")
         st.metric("Suma do wypłaty (Tydzień)", f"{earnings['base'] + earnings['bonus_amt']} PLN")
-        st.info("Tutaj pojawi się szczegółowa historia Twoich wypłat.")
-    elif menu == "3. 📅 Planowanie Remontu":
-        st.title("📅 Planowanie")
-        # Wywołujemy samą zakładkę planowania z dashboardu
-        st.info("Sekcja planowania — tutaj możesz sugerować nowe zadania.")
-    elif menu == "4. 🚨 Blokady i Materiały":
+    elif menu == "🚨 Blokady i Materiały":
         st.title("🚨 Zgłoś problem")
-        st.write("Tu możesz szybko zgłosić, czego Ci brakuje.")
-    elif menu == "5. 💬 Czat Budowy":
+    elif menu == "💬 Czat Budowy":
         st.title("💬 Czat")
-        st.write("Komunikacja z Inwestorem.")
     st.stop()
 
 # --- DALSZA LOGIKA DLA INWESTORA ---
