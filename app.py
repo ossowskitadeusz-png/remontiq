@@ -132,6 +132,24 @@ def read_table(table_name, select="*", filters=None, order_by=None):
     res = query.execute()
     return pd.DataFrame(res.data)
 
+def calculate_quality_score(tasks_accepted: int, total_tasks: int, blockers: int, delay_days: int) -> dict:
+    """Algorytm Enterprise Quality Score (65/25/10)"""
+    if total_tasks <= 0:
+        return {"score": 0, "risk": "CRITICAL", "breakdown": {"acceptance": 0, "schedule": 0, "blockers": 0}}
+    
+    acc_score = (tasks_accepted / total_tasks) * 100
+    sched_score = max(0, 100 - delay_days * 7)
+    block_score = max(0, 100 - blockers * 20)
+    
+    final_score = round(0.65 * acc_score + 0.25 * sched_score + 0.10 * block_score)
+    risk = "LOW" if final_score >= 85 else "MEDIUM" if final_score >= 70 else "HIGH" if final_score >= 50 else "CRITICAL"
+    
+    return {
+        "score": final_score,
+        "risk": risk,
+        "breakdown": {"acceptance": round(acc_score), "schedule": round(sched_score), "blockers": round(block_score)}
+    }
+
 def get_project_metadata():
     try:
         res = supabase.table("project_metadata").select("*").order("created_at", desc=True).limit(1).execute()
@@ -1465,12 +1483,6 @@ rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
 for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
-# Pomocnicza lista pokoi
-df_rooms = read_table("rooms", select="id, name")
-rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
-for _, r in df_rooms.iterrows():
-    rooms_dict.append({"id": r['id'], "name": r['name']})
-
 if menu == "3. 👷 DASHBOARD EKIPY (v2.0)":
     p_meta = get_project_metadata()
     if p_meta:
@@ -2057,6 +2069,58 @@ elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
                     }).eq("id", r['id']).execute()
                 st.rerun()
         else: st.info("Brak problemów.")
+
+elif menu == "8. 📈 Wyceny i Rozliczenia":
+    st.title("💰 Centrum Rozliczeń Finansowych")
+    st.caption("Zatwierdzaj wypłaty dla ekipy na podstawie jakości i postępów.")
+    
+    # Pobieramy wnioski o płatność z logów
+    requests = supabase.table("project_logs").select("*").eq("project_id", project_meta['id']).eq("type", "payment_request").execute().data or []
+    
+    if not requests:
+        st.info("Brak nowych wniosków o rozliczenie od Karola.")
+    else:
+        for req in requests:
+            with st.container(border=True):
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.subheader(f"Wniosek: {req['title']}")
+                    st.write(f"Data zgłoszenia: {req['created_at'][:10]}")
+                    st.write(f"Szczegóły: {req.get('details', 'Brak szczegółów')}")
+                
+                # SYMULACJA DANYCH DO SCORINGU
+                # W realnym systemie pobieramy to z bazy danych
+                tasks_accepted = 9 # Placeholder
+                total_t = 10
+                blockers = 1
+                delay = 2
+                
+                q = calculate_quality_score(tasks_accepted, total_t, blockers, delay)
+                
+                with col2:
+                    color = "#38a169" if q['risk'] == "LOW" else "#dd6b20" if q['risk'] == "MEDIUM" else "#e53e3e"
+                    st.markdown(f"""
+                    <div style="background:{color}; padding:20px; border-radius:15px; text-align:center; color:white;">
+                        <div style="font-size:12px; opacity:0.8;">QUALITY SCORE</div>
+                        <div style="font-size:40px; font-weight:bold;">{q['score']}</div>
+                        <div style="font-size:14px; font-weight:bold;">{q['risk']} RISK</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.divider()
+                st.write("### 🔍 Analiza ryzyka")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Jakość (Odbiory)", f"{q['breakdown']['acceptance']}%")
+                c2.metric("Terminowość", f"{q['breakdown']['schedule']}%")
+                c3.metric("Brak blokad", f"{q['breakdown']['blockers']}%")
+                
+                if st.button(f"✅ ZATWIERDŹ WYPŁATĘ (Wniosek {req['id'][-4:]})", type="primary", use_container_width=True):
+                    add_activity_log("Inwestor", "FINANCIAL", project_meta['id'], 
+                                     details=f"Zatwierdzono wypłatę. Score: {q['score']}. Risk: {q['risk']}")
+                    # Usuwamy wniosek po akceptacji
+                    supabase.table("project_logs").delete().eq("id", req['id']).execute()
+                    st.success("Wypłata zatwierdzona i zarchiwizowana!")
+                    st.rerun()
 
 elif menu == "8. Ustawienia":
     st.title("⚙️ Ustawienia i Eksport")
