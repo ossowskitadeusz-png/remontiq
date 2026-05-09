@@ -113,6 +113,12 @@ def render_investor_panel(
         # Pobierz oczekujące negocjacje
         pending_negotiations = negotiation_service.get_pending_negotiations(selected_project_id)
         
+        # DEBUG (usuń po naprawieniu)
+        if not pending_negotiations:
+            st.caption(f"DEBUG: Szukam dla Projektu ID: {selected_project_id} | Znalazłem: 0")
+        else:
+            st.caption(f"DEBUG: Szukam dla Projektu ID: {selected_project_id} | Znalazłem: {len(pending_negotiations)}")
+        
         if not pending_negotiations:
             st.success("✅ Brak oczekujących negocjacji. Wszystko uzgodnione!")
         else:
