@@ -2074,8 +2074,15 @@ elif menu == "8. 📈 Wyceny i Rozliczenia":
     st.title("💰 Centrum Rozliczeń Finansowych")
     st.caption("Zatwierdzaj wypłaty dla ekipy na podstawie jakości i postępów.")
     
-    # Pobieramy wnioski o płatność z logów
-    requests = supabase.table("project_logs").select("*").eq("project_id", project_meta['id']).eq("type", "payment_request").execute().data or []
+    # Pobieramy wnioski o płatność z logów (z obsługą błędów struktury bazy)
+    try:
+        requests = supabase.table("project_logs").select("*").eq("type", "payment_request").execute().data or []
+        # Jeśli masz kolumnę project_id, możemy filtrować dalej w Pythonie dla bezpieczeństwa
+        if requests and 'project_id' in requests[0]:
+            requests = [r for r in requests if r['project_id'] == project_meta['id']]
+    except Exception as e:
+        st.error(f"⚠️ Problem z dostępem do bazy rozliczeń: {e}")
+        requests = []
     
     if not requests:
         st.info("Brak nowych wniosków o rozliczenie od Karola.")
