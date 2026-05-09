@@ -52,6 +52,120 @@ def update_project_metadata(project_id, **kwargs):
         kwargs['actual_end_date'] = kwargs['actual_end_date'].isoformat()
     supabase.table("project_metadata").update(kwargs).eq("id", project_id).execute()
 
+# ============================================
+# SPRINT 15: KONSTRUKCJA KANONICZNA
+# ============================================
+
+TASK_STATUSES = {
+    "TODO": "TODO",
+    "IN_PROGRESS": "IN_PROGRESS",
+    "AWAITING_INSPECTION": "AWAITING_INSPECTION",
+    "DONE": "DONE"
+}
+
+def add_activity_log(author_name: str, action: str, task_id: str = None, project_id: str = None, details: str = ""):
+    try:
+        supabase.table("activity_log").insert({
+            "author_name": author_name, "action": action, "task_id": task_id, "project_id": project_id, "details": details
+        }).execute()
+        return True
+    except: return False
+
+def start_task_timer_v2(task_id: str, crew_member_id: str):
+    work_date = date.today().isoformat()
+    try:
+        supabase.table("tasks").update({"kanban_status": TASK_STATUSES["IN_PROGRESS"]}).eq("id", task_id).execute()
+        existing = supabase.table("time_tracking").select("*").eq("task_id", task_id).eq("crew_member_id", crew_member_id).eq("work_date", work_date).execute()
+        if existing.data:
+            supabase.table("time_tracking").update({"start_time": datetime.now().time().isoformat()}).eq("id", existing.data[0]['id']).execute()
+        else:
+            supabase.table("time_tracking").insert({"task_id": task_id, "crew_member_id": crew_member_id, "work_date": work_date, "start_time": datetime.now().time().isoformat()}).execute()
+        add_activity_log("Karol", "task_started", task_id, details="▶️ Rozpoczęto pracę")
+        return True
+    except Exception as e:
+        st.error(f"❌ Błąd start: {e}")
+        return False
+
+def stop_task_timer_v2(task_id: str, crew_member_id: str):
+    work_date = date.today().isoformat()
+    try:
+        res = supabase.table("time_tracking").select("*").eq("task_id", task_id).eq("crew_member_id", crew_member_id).eq("work_date", work_date).execute()
+        if res.data:
+            t = res.data[0]
+            start_dt = datetime.combine(date.today(), datetime.strptime(t['start_time'], "%H:%M:%S" if '.' not in t['start_time'] else "%H:%M:%S.%f").time())
+            end_dt = datetime.now()
+            if end_dt < start_dt: start_dt -= timedelta(days=1)
+            dur = (end_dt - start_dt).total_seconds() / 3600
+            supabase.table("time_tracking").update({"end_time": end_dt.time().isoformat(), "duration_hours": round(dur, 2)}).eq("id", t['id']).execute()
+            add_activity_log("Karol", "task_paused", task_id, details=f"⏸️ Pauza ({round(dur, 2)}h)")
+            return {"success": True, "duration_hours": round(dur, 2)}
+        return {"success": False}
+    except Exception as e:
+        st.error(f"❌ Błąd stop: {e}")
+        return {"success": False}
+
+def complete_task_v2(task_id: str, crew_member_id: str):
+    try:
+        stop_task_timer_v2(task_id, crew_member_id)
+        supabase.table("tasks").update({"kanban_status": TASK_STATUSES["AWAITING_INSPECTION"]}).eq("id", task_id).execute()
+        add_activity_log("Karol", "task_completed", task_id, details="✅ Gotowe do odbioru")
+        return True
+    except: return False
+
+def render_crew_dashboard(project_id: str, crew_member_id: str, crew_name: str = "Karol"):
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 15px; color: white; margin-bottom: 20px;">
+        <p style="font-size: 28px; font-weight: bold; margin: 0;">👷 Dashboard Ekipy — {crew_name}</p>
+        <p style="font-size: 14px; opacity: 0.9; margin: 5px 0 0 0;">Data: {datetime.now().strftime("%d.%m.%Y")}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    earnings = calculate_weekly_bonus_v2(project_id, crew_member_id)
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown(f"""
+        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 15px; color: #333;">💰 TWOJA PENSJA W TYM TYGODNIU</div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;"><span>Pensja Bazowa:</span><b>{earnings['base']} PLN</b></div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;"><span>Jakość Pracy:</span><b>{earnings['quality']}%</b></div>
+            <div style="display: flex; justify-content: space-between; padding: 15px 0; color: #22c55e;"><span>Bonus za Jakość:</span><b>+{earnings['bonus_amt']} PLN</b></div>
+            <div style="background: #f0fdf4; border-radius: 8px; padding: 15px; border-left: 4px solid #22c55e; text-align: center;">
+                <div style="font-size: 12px; color: #666;">RAZEM DO ZAPŁATY:</div>
+                <div style="font-size: 28px; font-weight: bold; color: #22c55e;">{earnings['base'] + earnings['bonus_amt']} PLN</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        b_pct = earnings['bonus_pct']
+        b_clr = "#ef4444" if b_pct == 0 else "#eab308" if b_pct == 10 else "#22c55e" if b_pct == 25 else "#0ea5e9"
+        st.markdown(f"""<div style="background: {b_clr}; color: white; padding: 30px; border-radius: 12px; text-align: center;">
+            <div style="font-size: 40px; margin-bottom: 10px;">{'🏆' if b_pct == 50 else '🎉' if b_pct == 25 else '✅' if b_pct == 10 else '⚠️'}</div>
+            <div style="font-size: 22px; font-weight: bold;">+{b_pct}% BONUSU</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.divider()
+    st.subheader("📋 Twoje Zadania na Dzisiaj")
+    tasks = supabase.table("tasks").select("*").eq("project_id", project_id).neq("kanban_status", "DONE").execute().data or []
+    for t in tasks:
+        with st.container():
+            col_t, col_a = st.columns([3, 1])
+            with col_t:
+                st.markdown(f"### {t['task_name']}")
+                st.caption(f"Faza: {t.get('phase_name', 'Ogólne')} | Status: {t['kanban_status']}")
+            with col_a:
+                if t['kanban_status'] == "TODO":
+                    if st.button("▶️ ZACZNIJ", key=f"start_{t['id']}", use_container_width=True):
+                        start_task_timer_v2(t['id'], crew_member_id)
+                        st.rerun()
+                elif t['kanban_status'] == "IN_PROGRESS":
+                    if st.button("✅ GOTOWE", key=f"done_{t['id']}", use_container_width=True, type="primary"):
+                        complete_task_v2(t['id'], crew_member_id)
+                        st.rerun()
+                    if st.button("⏸️ PAUZA", key=f"pause_{t['id']}", use_container_width=True):
+                        stop_task_timer_v2(t['id'], crew_member_id)
+                        st.rerun()
+        st.divider()
+
 def get_project_days_info(project_meta):
     start = datetime.strptime(project_meta['planned_start_date'], "%Y-%m-%d").date()
     end = datetime.strptime(project_meta['planned_end_date'], "%Y-%m-%d").date()
@@ -1013,195 +1127,18 @@ def render_activity_banner(role):
 # WIDOK EKIPY BUDOWLANEJ
 # ==========================================
 if st.session_state["role"] == "crew":
-    c1, c2 = st.columns([4, 1])
-    c1.title("\U0001f477 Dashboard Ekipy")
-    if c2.button("Wyloguj"): logout()
-
-    render_activity_banner("crew")
-
-    from motywacja import get_daily_message, get_bonus_meme
-    import random
-    
-    # Calculate day number based on earliest room
-    try:
-        df_rooms_for_date = supabase.table("rooms").select("created_at").order("created_at").limit(1).execute()
-        if df_rooms_for_date.data:
-            start_date = pd.to_datetime(df_rooms_for_date.data[0]['created_at']).date()
-        else:
-            start_date = date.today()
-    except Exception:
-        start_date = date.today()
-        
-    day_number = (date.today() - start_date).days + 1
-    if day_number < 1: day_number = 1
-    
-    msg = get_daily_message(day_number)
-    
-    st.info(f"📅 **DZIEŃ {day_number} / 30**")
-    st.success(msg)
-    
-    if random.random() > 0.7:  # 30% chance to show a bonus meme
-        st.warning(get_bonus_meme())
-    
-    st.divider()
-    
-    st.markdown("""
-<style>
-    /* Premium Design System v6.0 */
-    .stApp { background: #0f172a; color: #e2e8f0; }
-    .kpi-container { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 15px; }
-    .kpi-tile { 
-        min-width: 120px; flex: 1; 
-        background: rgba(30, 41, 59, 0.7); 
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 16px; padding: 15px; text-align: center;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    .task-card {
-        background: rgba(30, 41, 59, 0.5);
-        border-radius: 20px; padding: 20px; margin-bottom: 15px;
-        border-left: 8px solid #4a5568;
-        transition: transform 0.2s;
-    }
-    .task-card:hover { transform: translateY(-2px); background: rgba(30, 41, 59, 0.8); }
-    .status-active { border-left-color: #f59e0b; } /* Orange */
-    .status-ready { border-left-color: #3b82f6; } /* Blue */
-    .status-blocked { border-left-color: #ef4444; } /* Red */
-    .status-done { border-left-color: #10b981; } /* Green */
-    
-    .action-btn { 
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        color: white; border: none; padding: 10px 20px; border-radius: 12px;
-        font-weight: bold; width: 100%; margin-top: 10px; cursor: pointer;
-    }
-</style>
-""", unsafe_allow_html=True)
-    
-    # 1. KPI SECTION (Scrollable Tiles)
-    kpis = get_crew_kpis()
-    st.markdown(f"""
-    <div class="kpi-container">
-        <div class="kpi-tile"><div style="font-size:20px">🟢</div><div style="font-size:11px;color:#94a3b8">AKTYWNE</div><div style="font-size:22px;font-weight:bold">{kpis['in_progress']}</div></div>
-        <div class="kpi-tile"><div style="font-size:20px">❌</div><div style="font-size:11px;color:#94a3b8">BLOKADY</div><div style="font-size:22px;font-weight:bold;color:#ef4444">{kpis['blocked']}</div></div>
-        <div class="kpi-tile"><div style="font-size:20px">🔔</div><div style="font-size:11px;color:#94a3b8">ODBIORY</div><div style="font-size:22px;font-weight:bold">{kpis['awaiting_inspection']}</div></div>
-        <div class="kpi-tile"><div style="font-size:20px">📅</div><div style="font-size:11px;color:#94a3b8">DNI</div><div style="font-size:22px;font-weight:bold">{kpis['days_to_end']}</div></div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Szybkie Zgłoszenie (Nowość)
-    with st.expander("➕ ZGŁOŚ POTRZEBĘ / BRAK MATERIAŁU"):
-        with st.form("crew_req_form_new", clear_on_submit=True):
-            t_req = st.text_input("Czego brakuje? *", placeholder="np. Brak fugi, potrzebny PIN do domofonu")
-            d_req = st.date_input("Potrzebne na kiedy?")
-            b_req = st.checkbox("🚨 To blokuje moją pracę!")
-            if st.form_submit_button("Wyślij do Inwestora"):
-                if t_req:
-                    # Logika zgłoszenia
-                    supabase.table("crew_requests").insert({
-                        "title": t_req, "status": "Nowe", "created_at": datetime.now().isoformat()
-                    }).execute()
-                    st.success("Wysłano!")
-                    st.rerun()
-                else: st.error("Wpisz tytuł.")
-
-    # 2. PROJEKT LOGS (Alerts)
-    try:
-        active_logs = supabase.table("project_logs").select("*").neq("status", "RESOLVED").neq("status", "DONE").order("created_at", desc=True).limit(3).execute().data or []
-        if active_logs:
-            for l in active_logs:
-                cls = "log-decision" if l['type'] == "DECISION" else "log-issue"
-                st.markdown(f'<div class="{cls}"><b>{"💡 DECYZJA" if l["type"]=="DECISION" else "🚨 PROBLEM"}:</b> {l["title"]}</div>', unsafe_allow_html=True)
-    except: pass
-
-    st.divider()
-
-    # 3. TASKS (The main focus)
-    st.subheader("🛠️ Moje Zadania na Dziś")
-    
-    tasks = supabase.table("tasks").select("*").neq("kanban_status", "COMPLETED").order("planned_start_date").execute().data or []
-    
-    if not tasks:
-        st.success("Wszystko zrobione! Czekaj na nowe zadania od Inwestora.")
+    project_meta = get_project_metadata()
+    if project_meta:
+        render_crew_dashboard(
+            project_id=project_meta['id'],
+            crew_member_id="KAROL_ID",
+            crew_name="Karol"
+        )
     else:
-        for t in tasks:
-            status = t.get("kanban_status", "BACKLOG")
-            card_class = "task-card"
-            if t.get("is_blocked"): card_class += " status-blocked"
-            elif status == "IN_PROGRESS": card_class += " status-active"
-            elif status == "READY": card_class += " status-ready"
-            
-            with st.container():
-                st.markdown(f"""
-                <div class="{card_class}">
-                    <div style="display:flex; justify-content:space-between; align-items:start;">
-                        <h3 style="margin:0; font-size:18px;">{t['name']}</h3>
-                        <span style="font-size:10px; background:rgba(255,255,255,0.1); padding:4px 8px; border-radius:8px;">{status}</span>
-                    </div>
-                    <p style="font-size:13px; color:#94a3b8; margin:10px 0;">{t.get('description') or 'Brak opisu'}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Szybkie Akcje (Big Buttons)
-                c1, c2, c3 = st.columns(3)
-                if status == "READY" and not t.get("is_blocked"):
-                    if c1.button("▶️ ZACZNIJ", key=f"start_{t['id']}"):
-                        supabase.table("tasks").update({"kanban_status": "IN_PROGRESS"}).eq("id", t['id']).execute()
-                        st.rerun()
-                if status == "IN_PROGRESS" and not t.get("is_blocked"):
-                    if c1.button("✅ GOTOWE", key=f"done_{t['id']}"):
-                        supabase.table("tasks").update({"kanban_status": "AWAITING_INSPECTION"}).eq("id", t['id']).execute()
-                        st.rerun()
-                
-                if not t.get("is_blocked"):
-                    if c2.button("🚫 BLOKADA", key=f"block_{t['id']}"):
-                        st.session_state[f"show_block_{t['id']}"] = True
-                else:
-                    st.error(f"Zablokowane: {t.get('blocker_reason')}")
-                    if c2.button("🔓 NAPRAWIONE", key=f"resolve_{t['id']}"):
-                        supabase.table("tasks").update({"is_blocked": False, "blocker_reason": None}).eq("id", t['id']).execute()
-                        st.rerun()
-                
-                if c3.button("💬 CZAT", key=f"chat_{t['id']}"):
-                    st.session_state["sel_task_chat"] = t['id']
-                    st.rerun()
-                    
-        # OBSŁUGA CZATU (Jeśli wybrano zadanie)
-        if st.session_state.get("sel_task_chat"):
-            sel_id = st.session_state["sel_task_chat"]
-            task_info = next((t for t in tasks if t['id'] == sel_id), None)
-            if task_info:
-                st.markdown("---")
-                st.subheader(f"💬 Czat: {task_info['name']}")
-                if st.button("❌ Zamknij czat"):
-                    st.session_state["sel_task_chat"] = None
-                    st.rerun()
-                
-                # Pobieramy komentarze dla tego zadania
-                comms = supabase.table("task_comments").select("*").eq("task_id", sel_id).eq("is_deleted", False).order("created_at").execute().data or []
-                render_whatsapp_chat(comms, "Karol", sel_id, context="crew_dash")
-                render_chat_input(sel_id, "Karol", context="crew_dash")
-
-    # 4. GANTT & INNE (Harmonogram)
-    with st.expander("📅 Pełny Harmonogram i Historia Zgłoszeń"):
-        tab1, tab2 = st.tabs(["📋 Lista zadań", "📦 Moje zgłoszenia"])
-        with tab1:
-            all_t = supabase.table("tasks").select("*").order("planned_start_date").execute().data or []
-            if all_t:
-                st.dataframe(pd.DataFrame(all_t)[['name', 'kanban_status', 'is_blocked', 'planned_start_date']], hide_index=True, use_container_width=True)
-        with tab2:
-            reqs = supabase.table("crew_requests").select("*").order("created_at", desc=True).execute().data or []
-            if reqs:
-                for r in reqs:
-                    st.write(f"**{r['title']}** | Status: {r['status']}")
-            else: st.info("Brak zgłoszeń.")
-
-
-
+        st.error("⚠️ Brak aktywnego projektu. Skontaktuj się z Inwestorem.")
+    
+    if st.sidebar.button("Wyloguj"): logout()
     st.stop()
-
-
-
 
 # ==========================================
 # WIDOK INWESTORA
@@ -1223,12 +1160,14 @@ menu = st.sidebar.radio("Nawigacja", [
     "1. Dashboard (Centrum)",
     "1a. Centrum Komunikacji",
     "2. Start remontu",
+    "3. 👷 DASHBOARD EKIPY (v2.0)",
     "4. Zadania",
     "4a. Odbiór Prac",
     "5. Ekipa",
     "6. Wydatki (Finanse)",
     "7. Dziennik Projektu (Decyzje/Ryzyka)",
-    "8. Ustawienia",
+    "8. 📈 Wyceny i Rozliczenia",
+    "9. Ustawienia",
     "0. Charter Projektu",
 ])
 
@@ -1238,7 +1177,14 @@ rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
 for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
-if menu == "0. Charter Projektu":
+if menu == "3. 👷 DASHBOARD EKIPY (v2.0)":
+    p_meta = get_project_metadata()
+    if p_meta:
+        render_crew_dashboard(p_meta['id'], "KAROL_ID", "Karol") # KAROL_ID jako placeholder
+    else:
+        st.warning("Najpierw utwórz Charter Projektu.")
+
+elif menu == "0. Charter Projektu":
     st.title("🏗️ CHARTER PROJEKTU")
     st.caption("Główna oś czasu i parametry projektu")
 
