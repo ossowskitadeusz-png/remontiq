@@ -118,15 +118,22 @@ def render_new_proposal_form(supabase, negotiation_service, project_id):
     st.caption("Tutaj dodajesz nową pozycję do planu remontu i od razu proponujesz za nią cenę.")
     
     with st.form("form_create_and_quote_task", clear_on_submit=True):
-        t_name = st.text_input("Nazwa roboty (np. Podwieszany sufit) *")
+        t_name = st.text_input("Nazwa roboty (np. Podwieszany sufit lub Łazienka na gotowo) *")
         
-        # Pobieranie faz do wyboru
+        # Pobieranie pomieszczeń i sprawdzanie, czy nie są zablokowane RYCZAŁTEM
         phases = phase_service.get_phases(project_id)
-        phase_options = {p['phase_name']: p['id'] for p in phases} if phases else {"Brak (Ogólne)": None}
+        available_rooms = []
+        for p in (phases or []):
+            tasks_in_room = supabase.table("tasks").select("description").eq("phase_id", p['id']).execute().data
+            if not any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in (tasks_in_room or [])):
+                available_rooms.append(p)
+                
+        room_options = {p['phase_name']: p['id'] for p in available_rooms} if available_rooms else {"Brak wolnych pomieszczeń": None}
         
-        selected_phase_name = st.selectbox("📦 Wybierz fazę remontu", options=list(phase_options.keys()))
-        selected_phase_id = phase_options[selected_phase_name]
+        selected_phase_name = st.selectbox("📦 Wybierz pomieszczenie", options=list(room_options.keys()))
+        selected_phase_id = room_options[selected_phase_name]
         
+        is_lump_sum = st.checkbox("📦 Wyceń całe pomieszczenie (RYCZAŁT ZA CAŁOŚĆ) - zablokuje dodawanie kolejnych zadań w tym pokoju")
         t_desc = st.text_area("Opis techniczny (opcjonalnie)")
         
         col1, col2 = st.columns(2)
@@ -140,13 +147,16 @@ def render_new_proposal_form(supabase, negotiation_service, project_id):
                 st.error("Podaj nazwę roboty i cenę większą niż 0!")
             else:
                 try:
+                    # Wstrzykujemy ukryty tag, jeśli to ryczałt
+                    final_desc = f"{t_desc}\n[LUMP_SUM_ROOM]" if is_lump_sum else t_desc
+                    
                     # 1. Tworzymy nowe ZADANIE (Task) w bazie
                     u_id = st.session_state.get('user_id')
                     task_payload = {
                         "project_id": project_id,
                         "phase_id": selected_phase_id,
                         "name": t_name,
-                        "description": t_desc,
+                        "description": final_desc,
                         "kanban_status": "BACKLOG",
                         "commercial_status": "not_started",
                         "execution_status": "NOT_READY"
@@ -230,33 +240,41 @@ def render_crew_counter_card(neg, negotiation_service, key_suffix=""):
 
 def render_crew_planning_module(supabase, phase_service, project_id):
     """
-    Moduł zarządzania Fazami i podglądu struktury projektu.
+    Moduł zarządzania Pomieszczeniami i podglądu struktury projektu.
     """
-    # Formularz dodawania nowej Fazy
-    with st.expander("➕ Utwórz Nową Fazę Remontu (np. Demolka, Instalacje)"):
+    # Formularz dodawania nowego Pomieszczenia (korzysta z bazy phases)
+    with st.expander("➕ Utwórz Nowe Pomieszczenie (np. Łazienka Gościnna)"):
         with st.form("form_add_phase", clear_on_submit=True):
-            p_name = st.text_input("Nazwa nowej fazy *")
-            if st.form_submit_button("Dodaj fazę", type="primary"):
+            p_name = st.text_input("Nazwa pomieszczenia *")
+            if st.form_submit_button("Dodaj pomieszczenie", type="primary"):
                 if p_name:
                     phase_service.create_phase(project_id, p_name)
-                    st.success("Faza została dodana!")
+                    st.success("Pomieszczenie zostało dodane!")
                     st.rerun()
                 else:
-                    st.error("Podaj nazwę fazy.")
+                    st.error("Podaj nazwę pomieszczenia.")
     
     st.markdown("---")
     
     phases = phase_service.get_phases(project_id)
     if not phases:
-        st.info("Brak zdefiniowanych faz. Dodaj pierwszą fazę, by zacząć budować strukturę prac.")
+        st.info("Brak zdefiniowanych pomieszczeń. Dodaj pierwsze pomieszczenie, by zacząć budować strukturę prac.")
         return
         
     for p in phases:
         with st.container(border=True):
-            st.markdown(f"### 📦 {p['phase_name']}")
             
-            # Pobieramy zadania dla tej fazy
+            # Pobieramy zadania dla tego pomieszczenia
             tasks = supabase.table("tasks").select("*").eq("phase_id", p['id']).execute().data
+            
+            # Sprawdzamy czy pomieszczenie jest na ryczałcie
+            is_lump_sum_room = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in (tasks or []))
+            
+            if is_lump_sum_room:
+                st.markdown(f"### 📦 {p['phase_name']} 🔒 `RYCZAŁT`")
+                st.warning("Pomieszczenie zablokowane dla nowych zadań – rozliczane jako ryczałt.")
+            else:
+                st.markdown(f"### 📦 {p['phase_name']}")
             
             if tasks:
                 for t in tasks:
