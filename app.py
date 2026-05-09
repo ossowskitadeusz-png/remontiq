@@ -7,6 +7,8 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
+APP_VERSION = "sprint23-50-100-deploy-fix-001"
+
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
 # ==========================================
@@ -1240,10 +1242,12 @@ def calculate_smart_recommendations():
 # 3. INTERFEJS UŻYTKOWNIKA I LOGOWANIE
 # ==========================================
 st.set_page_config(page_title="RemontIQ Cloud", layout="wide", initial_sidebar_state="expanded")
+st.sidebar.caption(f"🚀 Wersja: {APP_VERSION}")
 
 # ==========================================
-# 4. REGULACJE FINANSOWE (Sprint 23)
+# SPRINT 23 — HYBRID PAYMENT 50/100 (Ścieżka A+)
 # ==========================================
+
 PAYMENT_RULES = {
     "limit_model": "HYBRID_50_100",
     "done_percent": 1.00,
@@ -1251,79 +1255,111 @@ PAYMENT_RULES = {
     "blocked_percent": 0.00,
     "global_advance_cap_percent": 0.30,
     "min_payment_request_amount": 500.00,
+    "strict_contractor_limit": True,
+    "investor_override_allowed": True,
     "advance_eligible_execution_statuses": ["TODO", "IN_PROGRESS"],
     "final_eligible_execution_statuses": ["DONE"],
-    "required_commercial_status": "ACCEPTED_LOCKED"
+    "blocked_execution_statuses": ["BLOCKED"],
+    "required_commercial_status": "ACCEPTED_LOCKED",
+    "paid_statuses": ["PAID", "APPROVED"],
+    "pending_statuses": ["SUBMITTED", "UNDER_REVIEW"]
 }
 
-def calculate_hybrid_payment_limit(project_id):
-    """Oblicza skumulowany limit wypłat narastająco (Model 50/100)."""
+def safe_float(value, default=0.0):
     try:
-        # Pobieramy budżet projektu
+        if value is None: return default
+        return float(value)
+    except: return default
+
+def money(value):
+    val = safe_float(value)
+    return f"{val:,.2f} PLN".replace(",", " ")
+
+# --- LOGIKA KWALIFIKACJI ZADANIA ---
+def calculate_task_payment_eligibility(task, rules=PAYMENT_RULES):
+    h = parse_handshake_data(task.get('description', ''))
+    locked_price = h['price']
+    commercial_status = h['commercial']
+    execution_status = h['execution']
+
+    if locked_price <= 0:
+        return {"eligibility_percent": 0.0, "eligible_value": 0.0, "type": "NO_PRICE", "reason": "Brak ceny."}
+
+    if commercial_status != rules["required_commercial_status"]:
+        return {"eligibility_percent": 0.0, "eligible_value": 0.0, "type": "NOT_LOCKED", "reason": "Cena niezaakceptowana."}
+
+    if execution_status in rules["final_eligible_execution_statuses"]:
+        return {"eligibility_percent": rules["done_percent"], "eligible_value": locked_price * rules["done_percent"], "type": "FINAL_100", "reason": "Zadanie DONE (100%)"}
+
+    if execution_status in rules["advance_eligible_execution_statuses"]:
+        return {"eligibility_percent": rules["advance_percent"], "eligible_value": locked_price * rules["advance_percent"], "type": "ADVANCE_50", "reason": "Zadanie Aktywne (50%)"}
+
+    if execution_status in rules["blocked_execution_statuses"]:
+        return {"eligibility_percent": rules["blocked_percent"], "eligible_value": 0.0, "type": "BLOCKED", "reason": "Zadanie zablokowane (0%)"}
+
+    return {"eligibility_percent": 0.0, "eligible_value": 0.0, "type": "OTHER", "reason": "Status niekwalifikowany."}
+
+# --- GŁÓWNY KALKULATOR LIMITU ---
+def calculate_hybrid_payment_limit(project_id):
+    try:
         p_meta = supabase.table("projects").select("*").eq("id", project_id).single().execute().data
-        if not p_meta: return {"available": 0.0, "gross_limit": 0.0}
+        budget = safe_float(p_meta.get('total_budget') or p_meta.get('budget'))
         
-        # Próba pobrania budżetu z różnych nazw kolumn
-        budget = float(p_meta.get('total_budget') or p_meta.get('budget') or 0)
-        
-        # Pobieramy wszystkie zadania
         all_tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
         
-        completed_val = 0.0
-        advance_base = 0.0
+        comp_val = 0.0
+        adv_base = 0.0
         
         for t in all_tasks:
-            h = parse_handshake_data(t.get('description', ''))
-            price = h['price']
-            c_stat = h['commercial']
-            e_stat = h['execution']
-            
-            if c_stat == "ACCEPTED_LOCKED":
-                if e_stat == "DONE":
-                    completed_val += price
-                elif e_stat in PAYMENT_RULES["advance_eligible_execution_statuses"]:
-                    advance_base += price
+            el = calculate_task_payment_eligibility(t)
+            if el['type'] == "FINAL_100": comp_val += el['eligible_value']
+            elif el['type'] == "ADVANCE_50": adv_base += el['eligible_value']
         
-        # Obliczamy składową zaliczkową z uwzględnieniem Global Cap (30%)
-        raw_advance = advance_base * PAYMENT_RULES["advance_percent"]
+        # Global Cap 30% na zaliczki
         global_cap = budget * PAYMENT_RULES["global_advance_cap_percent"]
-        capped_advance = min(raw_advance, global_cap) if budget > 0 else raw_advance
+        capped_adv = min(adv_base, global_cap) if budget > 0 else adv_base
         
-        gross_limit = completed_val + capped_advance
+        gross_limit = comp_val + capped_adv
         
-        # Pobieramy sumę wszystkich wniosków (tych które nie są odrzucone)
+        # Suma wypłat i oczekujących
         logs = supabase.table("project_logs").select("*").eq("project_id", project_id).eq("type", "payment_request").execute().data or []
-        
-        already_paid_or_pending = 0.0
+        paid_pending = 0.0
         for l in logs:
-            if l.get('status') != 'REJECTED':
+            if l.get('status') not in ['REJECTED', 'CANCELLED']:
                 try:
                     import json
                     d = json.loads(l.get('data', '{}'))
-                    already_paid_or_pending += float(d.get('amount', 0))
-                except:
-                    # Fallback jeśli kwota jest w tytule logu (np. "Wniosek: 1500 PLN")
-                    try:
-                        import re
-                        match = re.search(r'(\d+[\.,]?\d*)', l.get('title', ''))
-                        if match:
-                            already_paid_or_pending += float(match.group(1).replace(',', '.'))
-                    except: pass
+                    paid_pending += safe_float(d.get('amount'))
+                except: pass
 
-        available = max(0.0, gross_limit - already_paid_or_pending)
+        available = max(0.0, gross_limit - paid_pending)
         
         return {
             "available": round(available, 2),
             "gross_limit": round(gross_limit, 2),
-            "completed_val": round(completed_val, 2),
-            "advance_val": round(capped_advance, 2),
-            "already_paid": round(already_paid_or_pending, 2),
+            "completed_val": round(comp_val, 2),
+            "advance_val": round(capped_adv, 2),
+            "already_paid": round(paid_pending, 2),
             "budget": budget,
-            "advance_is_capped": raw_advance > global_cap and budget > 0
+            "is_advance_capped": adv_base > global_cap and budget > 0
         }
-    except Exception as e:
-        # st.error(f"Błąd kalkulatora 50/100: {e}")
-        return {"available": 0.0, "gross_limit": 0.0}
+    except: return {"available": 0.0, "gross_limit": 0.0}
+
+def classify_payment_request(limit_res):
+    if limit_res['completed_val'] > 0 and limit_res['advance_val'] > 0: return "MIXED"
+    if limit_res['advance_val'] > 0: return "ADVANCE"
+    return "FINAL"
+
+def build_payment_limit_snapshot(limit_res):
+    return {
+        "model": "HYBRID_50_100",
+        "available_at_request": limit_res['available'],
+        "gross_limit": limit_res['gross_limit'],
+        "completed_val": limit_res['completed_val'],
+        "advance_val": limit_res['advance_val'],
+        "already_paid": limit_res['already_paid'],
+        "is_capped": limit_res.get('is_advance_capped', False)
+    }
 
 # ==========================================
 # DARK MODE CSS — Sprint 7
@@ -1723,70 +1759,84 @@ if st.session_state['role'] == "crew":
         with tab_settlement:
             st.subheader("Wniosek o wypłatę (Model Hybrydowy 50/100)")
             
-            # --- KALKULACJA LIMITU (Sprint 23) ---
+            # --- KALKULACJA LIMITU (Sprint 23 — Ścieżka A+) ---
             fin = calculate_hybrid_payment_limit(p_id)
             
             c1, c2, c3 = st.columns(3)
-            c1.metric("Za ukończone (100%)", f"{fin['completed_val']:,.2f} PLN")
-            c2.metric("Zaliczki (50%)", f"{fin['advance_val']:,.2f} PLN", 
-                      help="Zaliczka ograniczona do 30% budżetu projektu" if fin['advance_is_capped'] else None)
-            c3.metric("Już pobrano/oczekuje", f"{fin['already_paid']:,.2f} PLN")
+            c1.metric("Za ukończone (100%)", money(fin['completed_val']))
+            c2.metric("Zaliczki (50%)", money(fin['advance_val']), 
+                      help="Zaliczka ograniczona do 30% budżetu projektu" if fin.get('is_advance_capped') else None)
+            c3.metric("Pobrano / Oczekuje", money(fin['already_paid']))
             
             st.markdown(f"""
             <div style="background:rgba(56,161,105,0.08); border:1px solid #38a169; padding:20px; border-radius:15px; text-align:center; margin:20px 0;">
-                <div style="font-size:14px; color:#888; text-transform:uppercase; letter-spacing:1px;">Dostępne do wypłaty narastająco</div>
-                <div style="font-size:42px; font-weight:bold; color:#38a169;">{fin['available']:,.2f} <span style="font-size:20px;">PLN</span></div>
+                <div style="font-size:14px; color:#888; text-transform:uppercase; letter-spacing:1px;">Dostępne do wypłaty teraz</div>
+                <div style="font-size:42px; font-weight:bold; color:#38a169;">{money(fin['available'])}</div>
             </div>
             """, unsafe_allow_html=True)
 
-            with st.form("payment_request_form_50100_final"):
-                st.write("### Składanie wniosku")
+            if fin.get('is_advance_capped'):
+                st.warning(f"⚠️ Zastosowano globalny limit zaliczek (30% budżetu). Część zaliczkowa została ograniczona.")
+
+            with st.form("payment_request_form_A_plus"):
+                st.write("### 📤 Nowy wniosek")
                 req_amount = st.number_input("Kwota wniosku (PLN)", min_value=0.0, step=100.0, format="%.2f")
-                req_note = st.text_area("Uzasadnienie / Cel wypłaty", placeholder="Podaj na co potrzebujesz środków (np. materiały, rozliczenie etapu)...")
+                req_note = st.text_area("Uzasadnienie / Cel wypłaty", placeholder="Np. Zakup materiałów, rozliczenie etapu...")
                 
-                # --- WALIDACJA TWARDA ---
+                # --- WALIDACJA TWARDA (Zasada 8) ---
                 error_msg = None
                 can_submit = True
                 
                 if req_amount > fin['available']:
-                    error_msg = f"❌ Kwota przekracza Twój aktualny limit ({fin['available']:,.2f} PLN)."
+                    error_msg = f"❌ Kwota przekracza limit ({money(fin['available'])})."
                     can_submit = False
                 elif req_amount < PAYMENT_RULES["min_payment_request_amount"] and req_amount < fin['available'] and req_amount > 0:
-                    error_msg = f"❌ Minimalna kwota wniosku to {PAYMENT_RULES['min_payment_request_amount']} PLN."
+                    error_msg = f"❌ Minimalna kwota to {money(PAYMENT_RULES['min_payment_request_amount'])}."
                     can_submit = False
                 elif req_amount <= 0:
                     can_submit = False
                 
-                if error_msg:
-                    st.error(error_msg)
+                if error_msg: st.error(error_msg)
                 
-                submitted = st.form_submit_button("📤 Wyślij wniosek do Inwestora", type="primary", disabled=not can_submit)
-                
-                if submitted:
-                    import json
-                    log_data = {
-                        "amount": req_amount,
-                        "note": req_note,
-                        "limit_snapshot": fin,
-                        "timestamp": datetime.now().isoformat(),
-                        "model": "HYBRID_50_100"
-                    }
+                if st.form_submit_button("Wyślij wniosek do Inwestora", type="primary", disabled=not can_submit):
+                    # --- STRAŻNIK OSTATNIEJ SEKUNDY (Opcja 2 - Backend Validation) ---
+                    # Przeliczamy limit jeszcze raz, tuż przed zapisem do bazy
+                    fresh_fin = calculate_hybrid_payment_limit(p_id)
                     
-                    supabase.table("project_logs").insert({
-                        "project_id": p_id,
-                        "type": "payment_request",
-                        "title": f"Wniosek o wypłatę: {req_amount:,.2f} PLN",
-                        "description": req_note,
-                        "data": json.dumps(log_data),
-                        "status": "SUBMITTED"
-                    }).execute()
-                    
-                    st.success("✅ Wniosek został wysłany! Inwestor otrzyma powiadomienie.")
-                    time.sleep(1)
-                    st.rerun()
+                    if req_amount > fresh_fin['available']:
+                        st.error(f"⚠️ Limit właśnie się zmienił! Aktualnie dostępne: {money(fresh_fin['available'])}. Spróbuj ponownie.")
+                    else:
+                        import json
+                        payment_type = classify_payment_request(fresh_fin)
+                        snapshot = build_payment_limit_snapshot(fresh_fin)
+                        
+                        log_data = {
+                            "amount": req_amount,
+                            "note": req_note,
+                            "payment_type": payment_type,
+                            "limit_snapshot": snapshot,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        
+                        # Zapisujemy jako wniosek o płatność
+                        supabase.table("project_logs").insert({
+                            "project_id": p_id,
+                            "type": "payment_request",
+                            "title": f"Wniosek ({payment_type}): {money(req_amount)}",
+                            "description": req_note,
+                            "data": json.dumps(log_data),
+                            "status": "SUBMITTED"
+                        }).execute()
+                        
+                        # Dodatkowy log audytowy
+                        add_activity_log("Karol", "FINANCIAL", p_id, f"Złożono wniosek {payment_type} na kwotę {money(req_amount)}")
+                        
+                        st.success("✅ Wniosek wysłany!")
+                        time.sleep(1)
+                        st.rerun()
 
             st.divider()
-            st.caption("ℹ️ System RemontIQ stosuje model 50/100: 100% za prace odebrane (DONE) oraz 50% zaliczki na prace zaakceptowane i aktywne. Całkowita suma zaliczek nie może przekroczyć 30% budżetu projektu.")
+            st.caption("ℹ️ Model Hybrydowy 50/100: 100% DONE | 50% TODO/IN_PROGRESS | 0% BLOCKED | Global Cap 30%.")
             
             st.divider()
             
@@ -2456,15 +2506,17 @@ elif menu == "settlements":
     st.title("💰 Centrum Rozliczeń Finansowych")
     st.caption("Zatwierdzaj wypłaty dla ekipy na podstawie modelu 50/100 i postępów prac.")
     
+    # --- DEBUG PANEL (Zasada 1) ---
+    with st.expander("🛠️ DEBUG: Szczegóły Kalkulatora 50/100 (Tylko dla Inwestora)"):
+        debug_fin = calculate_hybrid_payment_limit(project_meta['id'])
+        st.json(debug_fin)
+    
     # Pobieramy wnioski o płatność
     try:
-        reqs_all = supabase.table("project_logs").select("*").eq("type", "payment_request").order("created_at", desc=True).execute().data or []
-        # Filtrowanie po projekcie (jeśli kolumna istnieje)
         p_id = project_meta.get('id')
-        requests = [r for r in reqs_all if r.get('project_id') == p_id or r.get('projekt_id') == p_id]
-        # Tylko te oczekujące (SUBMITTED)
-        pending_requests = [r for r in requests if r.get('status') == 'SUBMITTED']
-        history_requests = [r for r in requests if r.get('status') != 'SUBMITTED']
+        reqs_all = supabase.table("project_logs").select("*").eq("project_id", p_id).eq("type", "payment_request").order("created_at", desc=True).execute().data or []
+        pending_requests = [r for r in reqs_all if r.get('status') == 'SUBMITTED']
+        history_requests = [r for r in reqs_all if r.get('status') != 'SUBMITTED']
     except Exception as e:
         st.error(f"⚠️ Błąd dostępu do bazy: {e}")
         pending_requests, history_requests = [], []
@@ -2478,43 +2530,50 @@ elif menu == "settlements":
             try:
                 d = json.loads(req.get('data', '{}'))
                 snapshot = d.get('limit_snapshot', {})
-                req_amount = float(d.get('amount', 0))
+                req_amount = safe_float(d.get('amount'))
+                req_type = d.get('payment_type', 'UNKNOWN')
                 req_note = d.get('note', '')
             except:
-                snapshot, req_amount, req_note = {}, 0.0, req.get('description', '')
+                snapshot, req_amount, req_type, req_note = {}, 0.0, 'UNKNOWN', req.get('description', '')
 
             with st.container(border=True):
                 col1, col2 = st.columns([2, 1])
                 with col1:
-                    st.subheader(f"Wniosek: {req_amount:,.2f} PLN")
-                    st.write(f"📅 Data: {req['created_at'][:10]} | Autor: **Karol (Szef Ekipy)**")
+                    st.subheader(f"Wniosek: {money(req_amount)}")
+                    
+                    # Badge typu
+                    if req_type == "ADVANCE": st.warning("💸 Typ: ZALICZKA (Prace w toku)")
+                    elif req_type == "FINAL": st.success("✅ Typ: ROZLICZENIE KOŃCOWE (Prace DONE)")
+                    else: st.info("🔀 Typ: MIESZANY (Zaliczka + Prace DONE)")
+                    
+                    st.write(f"📅 Data: {req['created_at'][:10]} | Autor: **Karol**")
                     if req_note: st.info(f"📝 Uzasadnienie: {req_note}")
                     
                     if snapshot:
-                        st.write("---")
-                        st.caption("📊 KONTEKST LIMITU 50/100 (W momencie prośby):")
-                        cc1, cc2, cc3 = st.columns(3)
-                        cc1.metric("Ukończone (100%)", f"{snapshot.get('completed_val', 0):,.2f}")
-                        cc2.metric("Zaliczki (50%)", f"{snapshot.get('advance_val', 0):,.2f}")
-                        cc3.metric("Limit Dostępny", f"{snapshot.get('available', 0):,.2f}")
+                        with st.expander("📊 SZCZEGÓŁY LIMITU 50/100 (Snapshot)"):
+                            sc1, sc2 = st.columns(2)
+                            sc1.write(f"**Ukończone (100%):** {money(snapshot.get('completed_val'))}")
+                            sc1.write(f"**Zaliczki (50%):** {money(snapshot.get('advance_val'))}")
+                            sc2.write(f"**Limit Brutto:** {money(snapshot.get('gross_limit'))}")
+                            sc2.write(f"**Już pobrano:** {money(snapshot.get('already_paid'))}")
+                            if snapshot.get('is_capped'): st.warning("Zastosowano Cap 30% budżetu.")
                 
                 with col2:
-                    # Szybka akcja
                     st.write("### Decyzja")
-                    if st.button("✅ ZATWIERDŹ", key=f"app_req_{req['id']}", use_container_width=True, type="primary"):
+                    if st.button("✅ ZATWIERDŹ", key=f"app_req_A_{req['id']}", use_container_width=True, type="primary"):
                         supabase.table("project_logs").update({"status": "APPROVED"}).eq("id", req['id']).execute()
-                        # Dodajemy log finansowy
-                        add_activity_log("Inwestor", "FINANCIAL", p_id, f"Zatwierdzono wypłatę: {req_amount:,.2f} PLN")
+                        add_activity_log("Inwestor", "FINANCIAL", p_id, f"ZATWIERDZONO wypłatę {req_type}: {money(req_amount)}")
                         st.success("Zatwierdzono!")
                         time.sleep(1)
                         st.rerun()
                     
-                    if st.button("❌ ODRZUĆ", key=f"rej_req_{req['id']}", use_container_width=True):
-                        supabase.table("project_logs").update({"status": "REJECTED"}).eq("id", req['id']).execute()
-                        add_activity_log("Inwestor", "FINANCIAL", p_id, f"ODRZUCONO wniosek: {req_amount:,.2f} PLN")
-                        st.warning("Odrzucono wniosek.")
-                        time.sleep(1)
-                        st.rerun()
+                    if st.button("❌ ODRZUĆ", key=f"rej_req_A_{req['id']}", use_container_width=True):
+                        reason = st.text_input("Powód odrzucenia", key=f"rej_reason_{req['id']}")
+                        if st.button("Potwierdź odrzucenie", key=f"rej_conf_{req['id']}"):
+                            supabase.table("project_logs").update({"status": "REJECTED", "description": reason}).eq("id", req['id']).execute()
+                            add_activity_log("Inwestor", "FINANCIAL", p_id, f"ODRZUCONO wniosek: {money(req_amount)}. Powód: {reason}")
+                            st.warning("Odrzucono.")
+                            st.rerun()
 
     if history_requests:
         with st.expander(f"📜 Historia rozliczeń ({len(history_requests)})"):
@@ -2522,11 +2581,6 @@ elif menu == "settlements":
                 status_color = "green" if h['status'] == "APPROVED" else "red"
                 st.write(f":{status_color}[{h['status']}] **{h['title']}** — {h['created_at'][:10]}")
                 if h.get('description'): st.caption(f"Komentarz: {h['description']}")
-                                     details=f"Zatwierdzono wypłatę. Score: {q['score']}. Risk: {q['risk']}")
-                    # Usuwamy wniosek po akceptacji
-                    supabase.table("project_logs").delete().eq("id", req['id']).execute()
-                    st.success("Wypłata zatwierdzona i zarchiwizowana!")
-                    st.rerun()
 
 elif menu == "negotiations":
     st.title("🤝 Centrum Negocjacji i Handshake")
