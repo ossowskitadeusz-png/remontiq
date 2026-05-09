@@ -53,7 +53,7 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     with col3:
         st.metric("✅ Zatwierdzone", len(approved_negs))
     with col4:
-        total_val = sum(float(n['proposed_price']) for n in approved_negs)
+        total_val = sum(float(n.get('response_price') or n['proposed_price']) for n in approved_negs)
         st.metric("💰 Wartość umów", f"{total_val:,.0f} zł")
 
     st.markdown("---")
@@ -147,9 +147,10 @@ def render_crew_counter_card(neg, negotiation_service, key_suffix=""):
 
 def render_crew_accepted_card(neg, key_suffix=""):
     task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')
+    final_price = neg.get('response_price') or neg['proposed_price']
     with st.container(border=True):
         st.markdown(f"### ✅ {task_name}")
-        st.metric("Cena finalna", f"{neg['proposed_price']:,.0f} zł")
+        st.metric("Cena finalna", f"{final_price:,.0f} zł")
         st.caption(f"Status: Zaakceptowano")
 
 if __name__ == "__main__":

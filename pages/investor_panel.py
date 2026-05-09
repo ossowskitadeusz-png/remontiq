@@ -73,10 +73,27 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     with tab_negotiations:
         st.subheader("💰 Negocjacje Cen - Handshake")
         if not pending_negs:
-            st.info("✅ Wszystkie ceny są ustalone!")
+            st.info("✅ Nie masz żadnych propozycji do rozpatrzenia.")
         else:
             for idx, neg in enumerate(pending_negs):
                 render_negotiation_card(neg, negotiation_service, key_suffix=f"investor_{idx}")
+                
+        st.markdown("---")
+        st.subheader("✅ Zatwierdzone Negocjacje")
+        approved_negs = [n for n in all_negs if n['status'] == 'accepted']
+        
+        if approved_negs:
+            approved_df = pd.DataFrame([
+                {
+                    'Zadanie': n.get('tasks', {}).get('name', 'N/A'),
+                    'Finalna Cena': f"{n.get('response_price') or n['proposed_price']:,.0f} zł",
+                    'Data Zatwierdzenia': n['responded_at'][:10] if n.get('responded_at') else n['created_at'][:10]
+                }
+                for n in approved_negs
+            ])
+            st.dataframe(approved_df, use_container_width=True)
+        else:
+            st.info("Brak zatwierdzonych umów")
     
     with tab_changes:
         st.subheader("📝 Wnioski o Zmiany")
