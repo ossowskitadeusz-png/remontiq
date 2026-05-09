@@ -1337,12 +1337,14 @@ menu = st.sidebar.radio("Nawigacja", [
     "1. Dashboard (Centrum)",
     "1a. Centrum Komunikacji",
     "2. Start remontu",
+    "3. 👷 DASHBOARD EKIPY (v2.0)",
     "4. Zadania",
     "4a. Odbiór Prac",
     "5. Ekipa",
     "6. Wydatki (Finanse)",
     "7. Dziennik Projektu (Decyzje/Ryzyka)",
-    "8. Ustawienia",
+    "8. 📈 Wyceny i Rozliczenia",
+    "9. Ustawienia",
     "0. Charter Projektu",
 ])
 
@@ -1352,7 +1354,14 @@ rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
 for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
-if menu == "0. Charter Projektu":
+if menu == "3. 👷 DASHBOARD EKIPY (v2.0)":
+    p_meta = get_project_metadata()
+    if p_meta:
+        render_crew_dashboard(p_meta['id'], "KAROL_ID", "Karol") # KAROL_ID jako placeholder
+    else:
+        st.warning("Najpierw utwórz Charter Projektu.")
+
+elif menu == "0. Charter Projektu":
     st.title("🏗️ CHARTER PROJEKTU")
     st.caption("Główna oś czasu i parametry projektu")
 
