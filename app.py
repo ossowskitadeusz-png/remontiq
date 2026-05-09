@@ -53,31 +53,40 @@ def update_project_metadata(project_id, **kwargs):
     supabase.table("project_metadata").update(kwargs).eq("id", project_id).execute()
 
 # ============================================
-# SPRINT 15: DASHBOARD EKIPY v2.0 (Backend)
+# SPRINT 15: KONSTRUKCJA KANONICZNA
 # ============================================
 
-def get_renovation_phases_summary() -> List[Dict]:
-    try:
-        response = supabase.table("renovation_phases").select("*").execute()
-        return response.data or []
-    except Exception as e:
-        st.error(f"❌ Błąd faz: {e}")
-        return []
+TASK_STATUSES = {
+    "TODO": "TODO",
+    "IN_PROGRESS": "IN_PROGRESS",
+    "AWAITING_INSPECTION": "AWAITING_INSPECTION",
+    "DONE": "DONE"
+}
 
-def start_task_timer(task_id: str, crew_member_id: str):
+def add_activity_log(author_name: str, action: str, task_id: str = None, project_id: str = None, details: str = ""):
+    try:
+        supabase.table("activity_log").insert({
+            "author_name": author_name, "action": action, "task_id": task_id, "project_id": project_id, "details": details
+        }).execute()
+        return True
+    except: return False
+
+def start_task_timer_v2(task_id: str, crew_member_id: str):
     work_date = date.today().isoformat()
     try:
+        supabase.table("tasks").update({"kanban_status": TASK_STATUSES["IN_PROGRESS"]}).eq("id", task_id).execute()
         existing = supabase.table("time_tracking").select("*").eq("task_id", task_id).eq("crew_member_id", crew_member_id).eq("work_date", work_date).execute()
         if existing.data:
             supabase.table("time_tracking").update({"start_time": datetime.now().time().isoformat()}).eq("id", existing.data[0]['id']).execute()
         else:
             supabase.table("time_tracking").insert({"task_id": task_id, "crew_member_id": crew_member_id, "work_date": work_date, "start_time": datetime.now().time().isoformat()}).execute()
+        add_activity_log("Karol", "task_started", task_id, details="▶️ Rozpoczęto pracę")
         return True
     except Exception as e:
-        st.error(f"❌ Błąd timera: {e}")
+        st.error(f"❌ Błąd start: {e}")
         return False
 
-def stop_task_timer(task_id: str, crew_member_id: str):
+def stop_task_timer_v2(task_id: str, crew_member_id: str):
     work_date = date.today().isoformat()
     try:
         res = supabase.table("time_tracking").select("*").eq("task_id", task_id).eq("crew_member_id", crew_member_id).eq("work_date", work_date).execute()
@@ -88,33 +97,74 @@ def stop_task_timer(task_id: str, crew_member_id: str):
             if end_dt < start_dt: start_dt -= timedelta(days=1)
             dur = (end_dt - start_dt).total_seconds() / 3600
             supabase.table("time_tracking").update({"end_time": end_dt.time().isoformat(), "duration_hours": round(dur, 2)}).eq("id", t['id']).execute()
-            return round(dur, 2)
-        return 0
+            add_activity_log("Karol", "task_paused", task_id, details=f"⏸️ Pauza ({round(dur, 2)}h)")
+            return {"success": True, "duration_hours": round(dur, 2)}
+        return {"success": False}
     except Exception as e:
         st.error(f"❌ Błąd stop: {e}")
-        return 0
+        return {"success": False}
 
-def calculate_weekly_bonus_v2(project_id: str, crew_member_id: str):
+def complete_task_v2(task_id: str, crew_member_id: str):
     try:
-        today = date.today()
-        monday = (today - timedelta(days=today.weekday())).isoformat()
-        payroll = supabase.table("weekly_payroll").select("*").eq("project_id", project_id).eq("crew_member_id", crew_member_id).eq("week_start_date", monday).execute()
-        base = payroll.data[0]['base_weekly_salary'] if payroll.data else 2000
-        
-        ests = supabase.table("task_estimates").select("*").eq("project_id", project_id).eq("status", "ACCEPTED").execute().data or []
-        if not ests: return {"bonus_pct": 0, "bonus_amt": 0, "quality": 0, "base": base}
-        
-        acc = len([e for e in ests if e['completion_status'] == 'ACCEPTED'])
-        total = len(ests)
-        q_pct = (acc / total * 100) if total > 0 else 0
-        
-        if q_pct <= 60: b_pct = 0
-        elif q_pct <= 80: b_pct = 10
-        elif q_pct <= 95: b_pct = 25
-        else: b_pct = 50
-        
-        return {"bonus_pct": b_pct, "bonus_amt": base * (b_pct / 100), "quality": round(q_pct, 1), "base": base}
-    except: return {"bonus_pct": 0, "bonus_amt": 0, "quality": 0, "base": 2000}
+        stop_task_timer_v2(task_id, crew_member_id)
+        supabase.table("tasks").update({"kanban_status": TASK_STATUSES["AWAITING_INSPECTION"]}).eq("id", task_id).execute()
+        add_activity_log("Karol", "task_completed", task_id, details="✅ Gotowe do odbioru")
+        return True
+    except: return False
+
+def render_crew_dashboard(project_id: str, crew_member_id: str, crew_name: str = "Karol"):
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 15px; color: white; margin-bottom: 20px;">
+        <p style="font-size: 28px; font-weight: bold; margin: 0;">👷 Dashboard Ekipy — {crew_name}</p>
+        <p style="font-size: 14px; opacity: 0.9; margin: 5px 0 0 0;">Data: {datetime.now().strftime("%d.%m.%Y")}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    earnings = calculate_weekly_bonus_v2(project_id, crew_member_id)
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown(f"""
+        <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 15px; color: #333;">💰 TWOJA PENSJA W TYM TYGODNIU</div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;"><span>Pensja Bazowa:</span><b>{earnings['base']} PLN</b></div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee;"><span>Jakość Pracy:</span><b>{earnings['quality']}%</b></div>
+            <div style="display: flex; justify-content: space-between; padding: 15px 0; color: #22c55e;"><span>Bonus za Jakość:</span><b>+{earnings['bonus_amt']} PLN</b></div>
+            <div style="background: #f0fdf4; border-radius: 8px; padding: 15px; border-left: 4px solid #22c55e; text-align: center;">
+                <div style="font-size: 12px; color: #666;">RAZEM DO ZAPŁATY:</div>
+                <div style="font-size: 28px; font-weight: bold; color: #22c55e;">{earnings['base'] + earnings['bonus_amt']} PLN</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with c2:
+        b_pct = earnings['bonus_pct']
+        b_clr = "#ef4444" if b_pct == 0 else "#eab308" if b_pct == 10 else "#22c55e" if b_pct == 25 else "#0ea5e9"
+        st.markdown(f"""<div style="background: {b_clr}; color: white; padding: 30px; border-radius: 12px; text-align: center;">
+            <div style="font-size: 40px; margin-bottom: 10px;">{'🏆' if b_pct == 50 else '🎉' if b_pct == 25 else '✅' if b_pct == 10 else '⚠️'}</div>
+            <div style="font-size: 22px; font-weight: bold;">+{b_pct}% BONUSU</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.divider()
+    st.subheader("📋 Twoje Zadania na Dzisiaj")
+    tasks = supabase.table("tasks").select("*").eq("project_id", project_id).neq("kanban_status", "DONE").execute().data or []
+    for t in tasks:
+        with st.container():
+            col_t, col_a = st.columns([3, 1])
+            with col_t:
+                st.markdown(f"### {t['task_name']}")
+                st.caption(f"Faza: {t.get('phase_name', 'Ogólne')} | Status: {t['kanban_status']}")
+            with col_a:
+                if t['kanban_status'] == "TODO":
+                    if st.button("▶️ ZACZNIJ", key=f"start_{t['id']}", use_container_width=True):
+                        start_task_timer_v2(t['id'], crew_member_id)
+                        st.rerun()
+                elif t['kanban_status'] == "IN_PROGRESS":
+                    if st.button("✅ GOTOWE", key=f"done_{t['id']}", use_container_width=True, type="primary"):
+                        complete_task_v2(t['id'], crew_member_id)
+                        st.rerun()
+                    if st.button("⏸️ PAUZA", key=f"pause_{t['id']}", use_container_width=True):
+                        stop_task_timer_v2(t['id'], crew_member_id)
+                        st.rerun()
+        st.divider()
 
 def get_project_days_info(project_meta):
     start = datetime.strptime(project_meta['planned_start_date'], "%Y-%m-%d").date()
