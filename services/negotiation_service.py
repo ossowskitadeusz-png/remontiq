@@ -22,12 +22,18 @@ class NegotiationService:
     4. Historia zapisywana w negotiation_history (audit trail)
     """
     
-    def __init__(self):
-        """Inicjalizacja połączenia z Supabase."""
-        self.supabase = create_client(
-            st.secrets["supabase_url"],
-            st.secrets["supabase_key"]
-        )
+    def __init__(self, supabase_client=None):
+        """
+        Inicjalizacja połączenia z Supabase.
+        Akceptuje opcjonalny istniejący klient lub tworzy nowy.
+        """
+        if supabase_client:
+            self.supabase = supabase_client
+        else:
+            self.supabase = create_client(
+                st.secrets["supabase_url"],
+                st.secrets["supabase_key"]
+            )
     
     # =====================================================
     # CORE OPERATIONS - PROPOZYCJE
