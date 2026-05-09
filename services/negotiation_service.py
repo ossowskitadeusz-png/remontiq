@@ -468,8 +468,8 @@ class NegotiationService:
         try:
             response = self.supabase.table('negotiations').select(
                 '''
-                id, task_id, proposed_by, proposed_price, response_price,
-                status, created_at, responded_at,
+                id, task_id, proposed_by, proposed_price, proposed_duration_days, 
+                response_price, response_duration_days, status, created_at, responded_at,
                 tasks!negotiations_task_id_fkey(id, name, project_id)
                 '''
             ).order('created_at', desc=True).execute()
