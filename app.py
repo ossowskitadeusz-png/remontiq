@@ -151,142 +151,110 @@ def calculate_weekly_bonus_v2(project_id: str, crew_member_id: str):
         return {"base": 2000.0, "quality": 0.0, "bonus_pct": 0.0, "bonus_amt": 0.0}
 
 def render_crew_dashboard(project_id: str, crew_member_id: str, crew_name: str = "Karol"):
-    # 1️⃣ HEADER & FINANSE (Psychologia Zarobków)
+    # 1️⃣ HEADER
     st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <h1 style="color: white; margin: 0; font-size: 28px;">Dzień dobry, {crew_name}! 👋</h1>
-                <p style="color: #94a3b8; margin: 5px 0 0 0;">Budowa: {datetime.now().strftime("%d.%m.%Y")} | Twój status: <span style="color: #22c55e;">Aktywny</span></p>
-            </div>
-            <div style="text-align: right;">
-                <span style="background: rgba(34, 197, 94, 0.2); color: #22c55e; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; border: 1px solid #22c55e;">NA POCZET WYPŁATY</span>
-            </div>
-        </div>
+    <div style="background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 25px;">
+        <h1 style="color: white; margin: 0; font-size: 28px;">Dzień dobry, {crew_name}! 👋</h1>
+        <p style="color: #94a3b8; margin: 5px 0 0 0;">Budowa: {datetime.now().strftime("%d.%m.%Y")}</p>
     </div>
     """, unsafe_allow_html=True)
 
-    earnings = calculate_weekly_bonus_v2(project_id, crew_member_id)
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        st.markdown(f"""
-        <div style="background: #ffffff; border-radius: 20px; padding: 25px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); color: #1e293b;">
-            <div style="font-size: 14px; font-weight: 700; color: #64748b; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 1px;">💰 Zarobki w tym tygodniu</div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 10px;"><span>Gwarantowana Podstawa:</span><span style="font-weight: 600;">{earnings['base']} PLN</span></div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 10px;"><span>Twój Bonus za Jakość:</span><span style="color: #22c55e; font-weight: 600;">+{earnings['bonus_amt']} PLN</span></div>
-            <div style="height: 1px; background: #e2e8f0; margin: 15px 0;"></div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 800; font-size: 18px;">SUMA:</span>
-                <span style="font-size: 32px; font-weight: 900; color: #1e293b;">{earnings['base'] + earnings['bonus_amt']} <span style="font-size: 16px;">PLN</span></span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    with c2:
-        b_pct = earnings['bonus_pct']
-        b_clr = "#ef4444" if b_pct == 0 else "#eab308" if b_pct == 10 else "#22c55e" if b_pct == 25 else "#0ea5e9"
-        st.markdown(f"""
-        <div style="background: {b_clr}; border-radius: 20px; padding: 25px; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; color: white;">
-            <div style="font-size: 40px; margin-bottom: 5px;">{'🏆' if b_pct == 50 else '🎉' if b_pct == 25 else '✅' if b_pct == 10 else '⚠️'}</div>
-            <div style="font-size: 24px; font-weight: 900;">+{b_pct}%</div>
-            <div style="font-size: 11px; opacity: 0.8; font-weight: 600;">PREMII ZA JAKOŚĆ</div>
-        </div>
-        """, unsafe_allow_html=True)
+    tab_today, tab_plan = st.tabs(["👷 DZIŚ", "📅 PLAN REMONTU"])
 
-    # 2️⃣ POSTĘPY FAZ (Nowość!)
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.subheader("📊 Puls Remontu (Fazy)")
-    try:
-        phases = supabase.table("renovation_phases").select("*").execute().data or []
-        if phases:
-            cols = st.columns(len(phases))
-            for i, p in enumerate(phases):
-                with cols[i]:
-                    pct = p['completion_percentage']
-                    st.markdown(f"""
-                    <div style="background: white; border-radius: 12px; padding: 12px; border: 1px solid #e2e8f0; text-align: center;">
-                        <div style="font-size: 11px; color: #64748b; font-weight: bold; margin-bottom: 5px;">{p['phase_name']}</div>
-                        <div style="font-size: 18px; font-weight: 800; color: #3b82f6;">{pct}%</div>
-                        <div style="background: #f1f5f9; height: 4px; border-radius: 2px; margin-top: 5px;">
-                            <div style="background: #3b82f6; width: {pct}%; height: 100%; border-radius: 2px;"></div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-    except: pass
-
-    # 3️⃣ ZADANIA Z ODZNAKAMI TRUDNOŚCI
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.subheader("🛠️ Twoje Zadania")
-    
-    tasks = supabase.table("tasks").select("*").eq("project_id", project_id).neq("kanban_status", "DONE").execute().data or []
-    
-    if not tasks:
-        st.success("✅ Wszystkie zadania ukończone! Odpocznij, Karol.")
-    else:
-        for t in tasks:
-            diff = t.get('difficulty', 'MEDIUM')
-            diff_clr = "#22c55e" if diff == "EASY" else "#f59e0b" if diff == "MEDIUM" else "#ef4444"
-            rate = 80 if diff == "EASY" else 100 if diff == "MEDIUM" else 150
-            
-            with st.container():
-                st.markdown(f"""
-                <div style="background: white; border-radius: 15px; padding: 20px; border-left: 8px solid {diff_clr}; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                    <div style="display: flex; justify-content: space-between; align-items: start;">
-                        <div>
-                            <span style="background: {diff_clr}22; color: {diff_clr}; padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: bold; border: 1px solid {diff_clr}44;">{diff} | {rate} PLN/h</span>
-                            <h3 style="margin: 10px 0 5px 0; color: #1e293b;">{t.get('name') or t.get('task_name')}</h3>
-                            <p style="margin: 0; color: #64748b; font-size: 13px;">⏱️ Estymacja: {t.get('estimated_hours', 8)}h | Faza: {t.get('phase_name', 'Ogólne')}</p>
-                        </div>
-                        <div style="text-align: right;">
-                             <span style="color: #94a3b8; font-size: 12px;">STATUS</span><br>
-                             <span style="font-weight: bold; color: #1e293b;">{t['kanban_status']}</span>
-                        </div>
-                    </div>
+    with tab_today:
+        earnings = calculate_weekly_bonus_v2(project_id, crew_member_id)
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.markdown(f"""
+            <div style="background: #ffffff; border-radius: 20px; padding: 25px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); color: #1e293b;">
+                <div style="font-size: 14px; font-weight: 700; color: #64748b; margin-bottom: 20px; text-transform: uppercase;">💰 TWOJA PENSJA</div>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 32px; font-weight: 900;">{earnings['base'] + earnings['bonus_amt']} <span style="font-size: 16px;">PLN</span></span>
+                    <span style="color: #22c55e; font-weight: bold;">+ {earnings['bonus_amt']} PLN Bonusu</span>
                 </div>
-                """, unsafe_allow_html=True)
-                
-                # Przyciski Akcji (Szerokie i czytelne)
-                c1, c2, c3 = st.columns(3)
-                if t['kanban_status'] == "TODO":
-                    if c1.button("▶️ ROZPOCZNIJ PRACĘ", key=f"start_{t['id']}", use_container_width=True, type="primary"):
-                        start_task_timer_v2(t['id'], crew_member_id)
-                        st.rerun()
-                elif t['kanban_status'] == "IN_PROGRESS":
-                    if c1.button("✅ SKOŃCZONE", key=f"done_{t['id']}", use_container_width=True, type="primary"):
-                        complete_task_v2(t['id'], crew_member_id)
-                        st.rerun()
-                    if c2.button("⏸️ PRZERWA", key=f"pause_{t['id']}", use_container_width=True):
-                        stop_task_timer_v2(t['id'], crew_member_id)
-                        st.rerun()
-                
-                if c3.button("💬 CZAT / UWAGI", key=f"chat_{t['id']}", use_container_width=True):
-                    st.session_state[f"chat_open_{t['id']}"] = not st.session_state.get(f"chat_open_{t['id']}", False)
-                
-                # Inline Chat
-                if st.session_state.get(f"chat_open_{t['id']}"):
-                    st.info("💡 Tu możesz dodać zdjęcie lub komentarz dla Inwestora.")
-                    render_comment_section(t['id'], "crew")
+            </div>
+            """, unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"""
+            <div style="background: #3b82f6; border-radius: 20px; padding: 25px; height: 100%; color: white; text-align: center;">
+                <div style="font-size: 24px; font-weight: 900;">+{earnings['bonus_pct']}%</div>
+                <div style="font-size: 10px; opacity: 0.8;">JAKOŚĆ PRACY</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    # 4️⃣ CENTRUM ZGŁOSZEŃ (Na dole)
-    st.markdown("<br>", unsafe_allow_html=True)
-    with st.expander("📦 Centrum Zgłoszeń (Materiały / Blokady)"):
-        with st.form("crew_report_form_v2", clear_on_submit=True):
-            st.markdown("### 🚨 Zgłoś problem lub potrzebę")
-            req_title = st.text_input("Czego brakuje? / Co blokuje?")
-            req_type = st.radio("Typ zgłoszenia", ["📦 Brak materiału", "🚨 Blokada pracy", "🛠️ Potrzebne narzędzie"], horizontal=True)
-            req_urgent = st.checkbox("To jest PILNE (blokuje mnie teraz!)")
-            if st.form_submit_button("Wyślij do Inwestora", use_container_width=True):
-                if req_title:
-                    submit_crew_request_with_blocker(
-                        title=f"[{req_type}] {req_title}",
-                        needed_by=date.today(),
-                        is_blocker=req_urgent
-                    )
-                    st.success("Wysłano! Inwestor otrzymał powiadomienie.")
-                    st.rerun()
-                else: st.error("Wpisz tytuł zgłoszenia.")
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.subheader("📋 Zadania na dziś")
+        tasks = supabase.table("tasks").select("*").eq("project_id", project_id).neq("kanban_status", "DONE").execute().data or []
+        
+        if not tasks:
+            st.info("Brak zadań na liście. Przejdź do zakładki PLAN, aby dodać nowe zadania.")
+        else:
+            for t in tasks:
+                diff = t.get('difficulty', 'MEDIUM')
+                diff_clr = "#22c55e" if diff == "EASY" else "#f59e0b" if diff == "MEDIUM" else "#ef4444"
+                with st.container(border=True):
+                    tc1, tc2 = st.columns([3, 1])
+                    tc1.markdown(f"**{t.get('name') or t.get('task_name')}**")
+                    tc1.caption(f"{diff} | {t.get('phase_name', 'Ogólne')} | {t.get('estimated_hours', 0)}h")
+                    
+                    if t['kanban_status'] == "TODO":
+                        if tc2.button("▶️ START", key=f"s_{t['id']}", use_container_width=True):
+                            start_task_timer_v2(t['id'], crew_member_id)
+                            st.rerun()
+                    elif t['kanban_status'] == "IN_PROGRESS":
+                        if tc2.button("✅ KONIEC", key=f"d_{t['id']}", use_container_width=True, type="primary"):
+                            complete_task_v2(t['id'], crew_member_id)
+                            st.rerun()
+                        if tc2.button("⏸️ PAUZA", key=f"p_{t['id']}", use_container_width=True):
+                            stop_task_timer_v2(t['id'], crew_member_id)
+                            st.rerun()
 
-    # 5️⃣ PRZYCISK WYLOGOWANIA (W sidebarze dla wygody)
-    if st.sidebar.button("🚪 Wyloguj z Budowy", use_container_width=True): logout()
+    with tab_plan:
+        st.markdown("### 🏗️ Buduj Plan Remontu")
+        st.write("Tu dodajesz zadania, które Inwestor zobaczy w swoim Centrum Kontroli.")
+        
+        with st.expander("➕ DODAJ NOWE ZADANIE", expanded=True):
+            with st.form("new_task_by_crew", clear_on_submit=True):
+                t_name = st.text_input("Nazwa zadania (np. Gładzie w salonie)")
+                t_phase = st.selectbox("Faza", ["1. Demolka", "2. Elektryka", "3. Hydraulika", "4. Ściany/Sufity", "5. Łazienka", "6. Podłogi", "7. Montaż końcowy"])
+                t_diff = st.select_slider("Trudność (Wpływa na Twoją stawkę)", options=["EASY", "MEDIUM", "HARD"], value="MEDIUM")
+                t_hours = st.number_input("Ile godzin to zajmie? (Estymacja)", min_value=1, value=8)
+                t_desc = st.text_area("Uwagi do zadania (dla Inwestora)")
+                
+                if st.form_submit_button("🚀 DODAJ DO PLANU", use_container_width=True):
+                    if t_name:
+                        new_task = {
+                            "project_id": project_id,
+                            "task_name": t_name,
+                            "name": t_name,
+                            "description": t_desc,
+                            "phase_name": t_phase,
+                            "difficulty": t_diff,
+                            "estimated_hours": t_hours,
+                            "kanban_status": "TODO",
+                            "created_by_crew": True
+                        }
+                        supabase.table("tasks").insert(new_task).execute()
+                        st.success(f"Dodano zadanie: {t_name}")
+                        st.rerun()
+                    else: st.error("Podaj nazwę zadania!")
+
+        st.markdown("---")
+        st.subheader("🗺️ Przegląd wszystkich faz")
+        all_tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
+        if all_tasks:
+            df_plan = pd.DataFrame(all_tasks)
+            for phase, group in df_plan.groupby("phase_name"):
+                with st.expander(f"📍 {phase} ({len(group)} zadań)"):
+                    for _, row in group.iterrows():
+                        st.write(f"- {row['task_name']} ({row['difficulty']} | {row['estimated_hours']}h) - **{row['kanban_status']}**")
+        else:
+            st.info("Plan jest jeszcze pusty. Dodaj pierwsze zadania powyżej.")
+
+    # 4️⃣ CENTRUM ZGŁOSZEŃ (Globalne)
+    with st.sidebar:
+        st.divider()
+        if st.button("🚪 Wyloguj"): logout()
 
 def get_project_days_info(project_meta):
     start = datetime.strptime(project_meta['planned_start_date'], "%Y-%m-%d").date()
