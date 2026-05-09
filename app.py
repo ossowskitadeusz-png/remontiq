@@ -15,11 +15,19 @@ def apply_saas_theme():
     """Wstrzykuje zaawansowany CSS dla profesjonalnego SaaS Layout."""
     st.markdown("""
     <style>
-        /* 1. Reset i Ukrywanie Elementów Streamlit */
-        header {visibility: hidden;}
+        /* 1. Reset i Stylizacja */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
         .stDeployButton {display:none;}
+        
+        /* Przywracamy przycisk boczny (Sidebar Toggle) i stylizujemy go */
+        button[kind="header"] {
+            z-index: 1001 !important;
+            color: white !important;
+            background: rgba(255,255,255,0.1) !important;
+            margin-left: 5px !important;
+            margin-top: 5px !important;
+        }
         
         /* 2. Floating Top Bar */
         .main-header {
@@ -1304,77 +1312,80 @@ def render_activity_banner(role):
 
 
 # ==========================================
-# WIDOK EKIPY BUDOWLANEJ
+# 🚀 SYSTEM NAWIGACJI SaaS (Multi-Role)
 # ==========================================
-if st.session_state["role"] == "crew":
-    # Próba pobrania projektu (z fallbackiem)
-    project_meta = get_project_metadata()
-    
-    if not project_meta:
-        # Próba ratunkowa - może projekt jest w tabeli project_charter?
-        try:
-            res_c = supabase.table("project_charter").select("*").limit(1).execute()
-            if res_c.data:
-                project_meta = res_c.data[0]
-                # Mapujemy stare nazwy na nowe jeśli trzeba
-                if 'project_name' not in project_meta and 'name' in project_meta:
-                    project_meta['project_name'] = project_meta['name']
-        except: pass
 
-    if project_meta:
-        # Kluczowa poprawka: Upewnij się, że project_id to 'id' z bazy
-        p_id = project_meta.get('id') or project_meta.get('project_id')
-        render_crew_dashboard(
-            project_id=p_id,
-            crew_member_id="KAROL_ID",
-            crew_name="Karol"
-        )
-    else:
-        st.error("⚠️ Brak aktywnego projektu.")
-        st.info("💡 Inwestorze: Wejdź w '0. Charter Projektu' i kliknij 'Utwórz Charter', aby odblokować dashboard ekipy.")
-    
-    if st.sidebar.button("Wyloguj"): logout()
-    st.stop()
-
-# ==========================================
-# WIDOK INWESTORA
-# ==========================================
-st.sidebar.markdown("### Zalogowano jako: Inwestor")
-if st.sidebar.button("Wyloguj"): logout()
-st.sidebar.divider()
-
-render_activity_banner("investor")
-
-project_meta = get_project_metadata()
-if project_meta:
-    st.sidebar.markdown(f"### 🏗️ {project_meta['project_name']}")
-    st.sidebar.caption(f"Status: {project_meta['status']}")
-else:
-    st.sidebar.warning("⚠️ Charter nie utworzony")
-
-# ==========================================
-# LAYOUT SaaS
-# ==========================================
+# 1. Pobranie metadanych projektu (Wspólne)
 project_meta = get_project_metadata()
 proj_name = project_meta['project_name'] if project_meta else "Brak projektu"
 role_name = "Inwestor" if st.session_state['role'] == "investor" else "Ekipa (Karol)"
 
+# 2. Renderowanie Górnego Bara (Wspólne)
 render_top_bar(proj_name, role_name, st.session_state.get('user_name', 'Użytkownik'))
 
-menu = st.sidebar.radio("Nawigacja", [
-    "1. Dashboard (Centrum)",
-    "1a. Centrum Komunikacji",
-    "2. Start remontu",
-    "3. 👷 DASHBOARD EKIPY (v2.0)",
-    "4. Zadania",
-    "4a. Odbiór Prac",
-    "5. Ekipa",
-    "6. Wydatki (Finanse)",
-    "7. Dziennik Projektu (Decyzje/Ryzyka)",
-    "8. 📈 Wyceny i Rozliczenia",
-    "9. Ustawienia",
-    "0. Charter Projektu",
-])
+# 3. Definicja Menu w Sidebarze (Zależna od Roli)
+if st.session_state['role'] == "crew":
+    menu = st.sidebar.radio("👷 MENU EKIPY", [
+        "1. 👷 Mój Dzień (Zadania)",
+        "2. 💰 Moje Zarobki",
+        "3. 📅 Planowanie Remontu",
+        "4. 🚨 Blokady i Materiały",
+        "5. 💬 Czat Budowy",
+        "6. 🚪 Wyloguj"
+    ])
+else:
+    menu = st.sidebar.radio("🏠 MENU INWESTORA", [
+        "1. Dashboard (Centrum)",
+        "1a. Centrum Komunikacji",
+        "2. Start remontu",
+        "3. 👷 Widok Ekipy",
+        "4. Zadania",
+        "4a. Odbiór Prac",
+        "5. Ekipa",
+        "6. Wydatki (Finanse)",
+        "7. Dziennik Projektu",
+        "8. 📈 Wyceny i Rozliczenia",
+        "9. Ustawienia",
+        "0. Charter Projektu",
+        "10. 🚪 Wyloguj"
+    ])
+
+# 4. Globalna Logika Wylogowania
+if "Wyloguj" in menu:
+    logout()
+    st.rerun()
+
+# 5. Blokada dla Ekipy (Przekierowanie na widoki Karola)
+if st.session_state['role'] == "crew":
+    p_id = project_meta.get('id') if project_meta else None
+    
+    if menu == "1. 👷 Mój Dzień (Zadania)":
+        render_crew_dashboard(p_id, "KAROL_ID", "Karol")
+    elif menu == "2. 💰 Moje Zarobki":
+        st.title("💰 Moje Zarobki")
+        earnings = calculate_weekly_bonus_v2(p_id, "KAROL_ID")
+        st.metric("Suma do wypłaty (Tydzień)", f"{earnings['base'] + earnings['bonus_amt']} PLN")
+        st.info("Tutaj pojawi się szczegółowa historia Twoich wypłat.")
+    elif menu == "3. 📅 Planowanie Remontu":
+        st.title("📅 Planowanie")
+        # Wywołujemy samą zakładkę planowania z dashboardu
+        st.info("Sekcja planowania — tutaj możesz sugerować nowe zadania.")
+    elif menu == "4. 🚨 Blokady i Materiały":
+        st.title("🚨 Zgłoś problem")
+        st.write("Tu możesz szybko zgłosić, czego Ci brakuje.")
+    elif menu == "5. 💬 Czat Budowy":
+        st.title("💬 Czat")
+        st.write("Komunikacja z Inwestorem.")
+    st.stop()
+
+# --- DALSZA LOGIKA DLA INWESTORA ---
+render_activity_banner("investor")
+
+# Pomocnicza lista pokoi (Dla formularzy)
+df_rooms = read_table("rooms", select="id, name")
+rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
+for _, r in df_rooms.iterrows():
+    rooms_dict.append({"id": r['id'], "name": r['name']})
 
 # Pomocnicza lista pokoi
 df_rooms = read_table("rooms", select="id, name")
