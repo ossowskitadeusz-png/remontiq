@@ -393,7 +393,7 @@ class NegotiationService:
                 '''
                 id, task_id, proposed_by, proposed_price, proposed_duration_days,
                 proposed_notes, status, created_at,
-                tasks(id, name, project_id, description)
+                tasks!negotiations_task_id_fkey(id, name, project_id, description)
                 '''
             ).eq('status', 'pending').execute()
             
@@ -418,7 +418,7 @@ class NegotiationService:
                 '''
                 id, task_id, proposed_by, proposed_price, response_price,
                 response_duration_days, response_notes, status, created_at,
-                tasks(id, name, project_id)
+                tasks!negotiations_task_id_fkey(id, name, project_id)
                 '''
             ).eq('status', 'counter_offer').execute()
             
@@ -470,7 +470,7 @@ class NegotiationService:
                 '''
                 id, task_id, proposed_by, proposed_price, response_price,
                 status, created_at, responded_at,
-                tasks(id, name, project_id)
+                tasks!negotiations_task_id_fkey(id, name, project_id)
                 '''
             ).order('created_at', desc=True).execute()
             
