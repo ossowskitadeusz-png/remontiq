@@ -279,17 +279,11 @@ def render_negotiation_card(neg, negotiation_service, project_id, key=""):
                 with col_submit:
                     if st.form_submit_button("Potwierdź Odrzucenie"):
                         success, message = negotiation_service.reject_proposal(
-                            negotiation_id=neg['id'],
+                            negotiation_id=neg_id,
                             investor_notes=reject_notes
                         )
                         if success:
                             st.success(message)
-                            st.session_state[f"reject_form_{neg['id']}"] = False
-                            st.rerun()
-                        else:
-                            st.error(message)
-                
-                with col_cancel:
                     if st.form_submit_button("Anuluj"):
                         st.session_state[f"reject_form_{neg['id']}"] = False
                         st.rerun()

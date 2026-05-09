@@ -226,18 +226,22 @@ def render_crew_counter_offer_card(neg, negotiation_service, key=""):
                     st.success(msg)
                     st.rerun()
         with b2:
-            if st.button("🔄 Nowa oferta", key=f"cnt_{neg['id']}_{key}", use_container_width=True):
-                st.session_state[f"mode_{neg['id']}"] = "counter"
+            if st.button("🔄 Nowa oferta", key=f"crew_rev_{neg_id}", use_container_width=True):
+                st.session_state[f"show_crew_revise_{neg_id}"] = True
                 st.rerun()
         
-        if st.session_state.get(f"mode_{neg['id']}") == "counter":
-            with st.form(f"form_{neg['id']}"):
-                p = st.number_input("Nowa cena", value=float(neg['response_price'] + 100))
-                if st.form_submit_button("Wyślij"):
-                    success, msg = negotiation_service.crew_counter_counter_offer(neg['id'], p, int(neg.get('proposed_duration_days', 1)))
+        if st.session_state.get(f"show_crew_revise_{neg_id}", False):
+            with st.form(f"form_crew_revise_{neg_id}"):
+                st.markdown("#### ✍️ Zmień swoją ofertę")
+                new_p = st.number_input("Nowa cena dla Inwestora", value=float(neg['proposed_price']))
+                if st.form_submit_button("Wyślij poprawioną ofertę", type="primary"):
+                    success, msg = negotiation_service.crew_counter_counter_offer(neg_id, new_p, int(neg.get('proposed_duration_days', 1)))
                     if success:
-                        st.session_state[f"mode_{neg['id']}"] = None
+                        st.session_state[f"show_crew_revise_{neg_id}"] = False
                         st.rerun()
+                if st.form_submit_button("Anuluj"):
+                    st.session_state[f"show_crew_revise_{neg_id}"] = False
+                    st.rerun()
 
 def render_crew_accepted_card(neg, negotiation_service, key=""):
     task_info = neg.get('tasks', {})
