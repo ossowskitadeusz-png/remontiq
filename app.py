@@ -125,6 +125,31 @@ def complete_task_v2(task_id: str, crew_member_id: str):
         return True
     except: return False
 
+def calculate_weekly_bonus_v2(project_id: str, crew_member_id: str):
+    """Oblicza aktualną pensję i bonus dla Karola w bieżącym tygodniu."""
+    try:
+        # 1. Pobierz dane z weekly_payroll (jeśli istnieją)
+        res = supabase.table("weekly_payroll").select("*").eq("project_id", project_id).eq("crew_member_id", crew_member_id).order("week_start_date", desc=True).limit(1).execute()
+        
+        if res.data:
+            p = res.data[0]
+            return {
+                "base": float(p['base_weekly_salary']),
+                "quality": float(p['quality_percentage']),
+                "bonus_pct": float(p['quality_percentage']), # Uproszczone mapowanie
+                "bonus_amt": float(p['bonus_amount'])
+            }
+        
+        # 2. Jeśli brak wpisu, zwróć wartości domyślne (Gwarantowane 2000 PLN)
+        return {
+            "base": 2000.0,
+            "quality": 0.0,
+            "bonus_pct": 0.0,
+            "bonus_amt": 0.0
+        }
+    except:
+        return {"base": 2000.0, "quality": 0.0, "bonus_pct": 0.0, "bonus_amt": 0.0}
+
 def render_crew_dashboard(project_id: str, crew_member_id: str, crew_name: str = "Karol"):
     st.markdown(f"""
     <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 15px; color: white; margin-bottom: 20px;">
