@@ -1822,6 +1822,26 @@ elif menu == "charter":
             st.success("✅ **Status: UKOŃCZONY**")
 
 elif menu == "dashboard":
+    # --- MODUŁ DIAGNOSTYCZNY RLS (Sprint 22) ---
+    with st.expander("🔍 RLS DIAGNOSTYKA (Techniczna)"):
+        st.write("### Status Połączenia i Sesji")
+        try:
+            # Sprawdzenie sesji
+            session = supabase.auth.get_session()
+            st.write(f"**Session User ID:** `{session.user.id if session and session.user else 'None'}`")
+            st.write(f"**Session Valid:** {bool(session)}")
+            
+            # Sprawdzenie roli i SELECT
+            result = supabase.table('tasks').select('id').limit(1).execute()
+            st.write(f"**Can SELECT from tasks:** ✅")
+            
+            # Sprawdzenie struktury (mockup - sprawdzimy co zwróci Select *)
+            if result.data:
+                st.write(f"**Przykładowe kolumny w tasks:** `{list(result.data[0].keys())}`")
+        except Exception as e:
+            st.error(f"Błąd diagnostyki: {e}")
+            st.info("💡 Jeśli widzisz błąd 42501 tutaj, to znaczy, że nawet SELECT jest zablokowany!")
+
     st.title("🎮 COMMAND CENTER")
     st.caption(f"Centrum kontroli projektu — {date.today().strftime('%d.%m.%Y')}")
 
