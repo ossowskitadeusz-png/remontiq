@@ -349,7 +349,8 @@ class NegotiationService:
             # ale interpretujemy kto czeka na odpowiedź
             
             self.supabase.table('negotiations').update({
-                'status': 'counter_offer',
+                'status': 'pending',  # ← Zmieniono z counter_offer! Piłeczka wraca do Inwestora
+
                 'proposed_price': crew_counter_price,  # ← Karol zmienia swoją propozycję
                 'proposed_duration_days': crew_counter_duration_days,
                 'proposed_notes': crew_notes,
@@ -392,7 +393,8 @@ class NegotiationService:
             response = self.supabase.table('negotiations').select(
                 '''
                 id, task_id, proposed_by, proposed_price, proposed_duration_days,
-                proposed_notes, status, created_at,
+                proposed_notes, response_price, response_duration_days, response_notes, 
+                status, created_at,
                 tasks!negotiations_task_id_fkey(id, name, project_id, description)
                 '''
             ).eq('status', 'pending').execute()
