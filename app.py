@@ -162,44 +162,54 @@ TASK_STATUSES = {
 }
 
 def process_task_handshake(task_id, action, actor_role, price=None, comment=""):
-    """Obsługuje logikę uścisku dłoni (Wersja bezpieczna - Schema-Agnostic)."""
+    """Obsługuje zaawansowany Handshake (Commercial vs Execution)."""
     try:
-        # Pobieramy obecne zadanie, by zachować opis
         t = supabase.table("tasks").select("*").eq("id", task_id).single().execute().data
         desc = t.get('description', '') or ''
         
-        new_status = "DRAFT"
-        if action == "SUBMIT_VALUATION": new_status = "PROPOSED_BY_CREW"
-        elif action == "ACCEPT": new_status = "ACCEPTED_LOCKED"
-        elif action == "COUNTER_OFFER": new_status = "CHANGES_REQUESTED"
+        # Domyślne wartości
+        c_status = "PENDING"
+        e_status = "NOT_READY"
+        l_price = price
+        
+        if action == "SUBMIT_VALUATION":
+            c_status = "PROPOSED_BY_CREW"
+            e_status = "NOT_READY"
+        elif action == "ACCEPT":
+            c_status = "ACCEPTED_LOCKED"
+            e_status = "TODO" # Odblokowuje robotę na Kanbanie
+            l_price = price
+        elif action == "COUNTER_OFFER":
+            c_status = "INVESTOR_COUNTERED"
+            e_status = "NOT_READY"
+        elif action == "LOCK_OFFLINE":
+            c_status = "ACCEPTED_LOCKED"
+            e_status = "TODO"
+            l_price = price
 
-        # Pakujemy dane do opisu (zabezpieczenie przed brakiem kolumn)
-        meta_tag = f"--- DANE NEGOCJACYJNE ---\nCENA: {price}\nSTATUS: {new_status}\nKOMENTARZ: {comment}\n------------------------\n\n"
-        # Usuwamy stary tag jeśli był
+        # Budujemy nowy tag metadanych
+        meta_tag = f"--- DANE NEGOCJACYJNE ---\nCOMMERCIAL: {c_status}\nEXECUTION: {e_status}\nLOCKED_PRICE: {l_price}\nLAST_COMMENT: {comment}\n------------------------\n\n"
+        
         if "--- DANE NEGOCJACYJNE ---" in desc:
             desc = desc.split("------------------------")[-1].strip()
         
         new_desc = meta_tag + desc
+        update_data = {"description": new_desc, "updated_at": datetime.now().isoformat()}
         
-        update_data = {
-            "description": new_desc,
-            "updated_at": datetime.now().isoformat()
-        }
-        
-        # Jeśli jednak kolumna status istnieje, spróbujmy ją też zaktualizować (opcjonalnie)
-        try: supabase.table("tasks").update({"status": new_status}).eq("id", task_id).execute()
-        except: pass
-        
-        if action == "ACCEPT":
-            try: supabase.table("tasks").update({"kanban_status": "TODO"}).eq("id", task_id).execute()
+        # Synchronizujemy kanban_status jeśli zaakceptowano
+        if c_status == "ACCEPTED_LOCKED":
+            update_data["kanban_status"] = "TODO"
+            # Opcjonalnie: zapisujemy do kolumny price jeśli istnieje
+            try: update_data["locked_price"] = price
             except: pass
 
         supabase.table("tasks").update(update_data).eq("id", task_id).execute()
         
-        add_activity_log(actor_role, f"HANDSHAKE_{action}", "ALL", f"Zadanie {task_id} -> {price}")
+        # Log eventu do audytu
+        add_activity_log(actor_role, f"HANDSHAKE_{action}", "FINANCIAL", f"Zadanie {task_id}: {l_price} PLN | Status: {c_status}")
         return True
     except Exception as e:
-        st.error(f"Błąd Handshake: {e}")
+        st.error(f"Błąd Handshake 2.0: {e}")
         return False
 
 def get_project_metadata():
@@ -1416,23 +1426,31 @@ if st.session_state['role'] == "crew":
         logout()
         st.rerun()
 else:
-    menu = st.sidebar.radio("Nawigacja", [
-        "1. 🏠 Dashboard Inwestora",
-        "2. 📋 Plan Remontu (Zadania)",
-        "3. 👷 Widok Ekipy",
-        "4. 📅 Harmonogram",
-        "5. 💰 Budżet i Wydatki",
-        "6. 👷 Ekipy i Wykonawcy",
-        "7. 📒 Dziennik Projektu (Decyzje/Ryzyka)",
-        "8. 📈 Wyceny i Rozliczenia",
-        "9. 🤝 Negocjacje i Planowanie",
-        "10. ⚙️ Ustawienia Projektu",
-        "0. Charter Projektu",
-        "🚪 Wyloguj"
-    ])
+    # Definicja stron Inwestora (Klucz techniczny : Etykieta widoczna)
+    INVESTOR_PAGES = {
+        "dashboard": "1. 🏠 Dashboard Inwestora",
+        "tasks": "2. 📋 Plan Remontu (Zadania)",
+        "crew_view": "3. 👷 Widok Ekipy",
+        "schedule": "4. 📅 Harmonogram",
+        "budget": "5. 💰 Budżet i Wydatki",
+        "crews": "6. 👷 Ekipy i Wykonawcy",
+        "journal": "7. 📒 Dziennik Projektu (Decyzje/Ryzyka)",
+        "settlements": "8. 📈 Wyceny i Rozliczenia",
+        "negotiations": "9. 🤝 Negocjacje i Planowanie",
+        "settings": "10. ⚙️ Ustawienia Projektu",
+        "charter": "0. Charter Projektu",
+        "logout": "🚪 Wyloguj"
+    }
+    
+    selected_key = st.sidebar.radio(
+        "Nawigacja", 
+        options=list(INVESTOR_PAGES.keys()),
+        format_func=lambda x: INVESTOR_PAGES[x]
+    )
+    menu = selected_key # Mapujemy dla kompatybilności wstecznej
 
 # 4. Globalna Logika Wylogowania
-if "Wyloguj" in menu:
+if menu == "logout":
     logout()
     st.rerun()
 
@@ -1513,28 +1531,43 @@ if st.session_state['role'] == "crew":
             try:
                 all_t = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
                 tasks = [t for t in all_t if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '')]
-                tasks = [t for t in tasks if "STATUS: ACCEPTED_LOCKED" not in (t.get('description') or '')]
+                # Wykluczamy te zablokowane
+                tasks = [t for t in tasks if "COMMERCIAL: ACCEPTED_LOCKED" not in (t.get('description') or '')]
             except:
                 tasks = []
             
             if tasks:
                 for t in tasks:
                     desc_f = t.get('description', '') or ''
-                    t_status = "PROPOSED_BY_CREW"
-                    if "STATUS: " in desc_f: t_status = desc_f.split("STATUS: ")[1].split("\n")[0]
+                    # Parsowanie Tagów 2.0
+                    c_status = "PENDING"
+                    crew_p = 0
+                    inv_p = 0
+                    last_msg = ""
+                    
+                    try:
+                        lines = desc_f.split("\n")
+                        for line in lines:
+                            if "COMMERCIAL:" in line: c_status = line.split(":")[1].strip()
+                            if "LOCKED_PRICE:" in line: inv_p = line.split(":")[1].strip()
+                            if "CENA:" in line: crew_p = line.split(":")[1].strip()
+                            if "LAST_COMMENT:" in line: last_msg = line.split(":")[1].strip()
+                    except: pass
                     
                     with st.container(border=True):
                         c1, c2 = st.columns([3, 1])
                         with c1:
                             st.write(f"**{t.get('name', 'Bez nazwy')}**")
-                            st.caption(f"Status: {TASK_STATUSES.get(t_status, t_status)}")
-                            if t_status == "CHANGES_REQUESTED":
-                                inv_p = desc_f.split("CENA: ")[1].split("\n")[0] if "CENA: " in desc_f else "0"
-                                inv_msg = desc_f.split("KOMENTARZ: ")[1].split("\n")[0] if "KOMENTARZ: " in desc_f else "-"
-                                st.warning(f"💬 Inwestor proponuje: {inv_p} PLN. Komentarz: {inv_msg}")
+                            st.caption(f"Status Finansowy: {c_status}")
+                            
+                            if c_status == "INVESTOR_COUNTERED":
+                                st.warning(f"💬 Inwestor proponuje korektę: **{inv_p} PLN**")
+                                if last_msg: st.caption(f"Komentarz Inwestora: {last_msg}")
+                                if st.button("🤝 Akceptuję propozycję Inwestora", key=f"crew_acc_{t['id']}"):
+                                    process_task_handshake(t['id'], "LOCK_OFFLINE", "crew", price=float(inv_p), comment="Karol zaakceptował kontrofertę")
+                                    st.rerun()
                         with c2:
-                            c_p = desc_f.split("CENA: ")[1].split("\n")[0] if "CENA: " in desc_f else "0"
-                            st.write(f"{c_p} PLN")
+                            st.write(f"Twoja cena: {crew_p} PLN")
             else:
                 st.info("Brak aktywnych negocjacji.")
 
@@ -1625,7 +1658,7 @@ if menu == "3. 👷 DASHBOARD EKIPY (v2.0)":
     else:
         st.warning("Najpierw utwórz Charter Projektu.")
 
-elif menu == "0. Charter Projektu":
+elif menu == "charter":
     st.title("🏗️ CHARTER PROJEKTU")
     st.caption("Główna oś czasu i parametry projektu")
 
@@ -1729,7 +1762,7 @@ elif menu == "0. Charter Projektu":
         elif project_meta['status'] == "COMPLETED":
             st.success("✅ **Status: UKOŃCZONY**")
 
-elif menu == "1. Dashboard (Centrum)":
+elif menu == "dashboard":
     st.title("🎮 COMMAND CENTER")
     st.caption(f"Centrum kontroli projektu — {date.today().strftime('%d.%m.%Y')}")
 
@@ -1917,7 +1950,7 @@ elif menu == "1. Dashboard (Centrum)":
 
 
 
-elif menu == "1a. Centrum Komunikacji":
+elif menu == "communication":
     st.title("💬 Centrum Komunikacji")
     sel_chat = st.session_state.get("selected_chat", "GLOBAL")
 
@@ -1949,7 +1982,7 @@ elif menu == "1a. Centrum Komunikacji":
                     render_whatsapp_chat(task_c['comments'], "Inwestor", sel_chat, context="center_task")
                     render_chat_input(sel_chat, "Inwestor", context="center_task")
 
-elif menu == "2. Start remontu":
+elif menu == "start":
     st.title("🚀 Kreator Startowy (Cloud)")
     st.write("Bezpiecznie dodaj pokoje do projektu w chmurze.")
     with st.form("kreator_form", clear_on_submit=True):
@@ -1967,7 +2000,7 @@ elif menu == "2. Start remontu":
     else:
         st.info("Brak wprowadzonych pomieszczeń.")
 
-elif menu == "6. Wydatki (Finanse)":
+elif menu == "budget":
     st.title("💰 Wydatki (Supabase Sync)")
     df_exp = read_table("expenses")
     total = df_exp['amount'].sum() if not df_exp.empty else 0
@@ -1992,7 +2025,7 @@ elif menu == "6. Wydatki (Finanse)":
     else:
         st.info("Brak zarejestrowanych wydatków.")
 
-elif menu == "4. Zadania":
+elif menu == "tasks":
     st.title("📋 PLAN KAROLA — Twoje Zadania")
     st.caption("Karol zaplanował pracę. Twoja rola: usunąć blokady i dodać uwagi.")
     tasks = get_tasks_with_dependencies()
@@ -2033,7 +2066,7 @@ elif menu == "4. Zadania":
                     st.success("Zadanie ukończone!")
                     st.rerun()
 
-elif menu == "4a. Odbiór Prac":
+elif menu == "inspections":
     st.title("🔔 ODBIÓR PRAC")
     st.caption("Karol zgłosił zakończenie zadań. Sprawdzi je, dodaj komentarz i zatwierdź lub zażąda poprawek.")
 
@@ -2104,7 +2137,7 @@ elif menu == "4a. Odbiór Prac":
     except Exception as e:
         st.error(f"Błąd wczytywania historii: {e}")
 
-elif menu == "5. Ekipa":
+elif menu == "crew_view":
     st.title("👷 Zapotrzebowania Ekipy")
     st.caption("Karol zgłasza czego potrzebuje. Potwierdź, że się tym zajmujesz i oznacz jako dostarczone.")
 
@@ -2175,7 +2208,7 @@ elif menu == "5. Ekipa":
 # NOWE MODUŁY SPRINT 4 (7-10)
 # ==========================================
 
-elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
+elif menu == "journal":
     st.title("📒 Dziennik Projektu")
     st.write("Centralne miejsce zarządzania decyzjami i problemami.")
     
@@ -2240,7 +2273,7 @@ elif menu == "7. Dziennik Projektu (Decyzje/Ryzyka)":
         st.subheader("Przekształć w zadanie (Genialny Workflow)")
         st.caption("Masz problem, który chcesz zamienić na zadanie do wykonania? Połączmy je.")
 
-elif menu == "8. 📈 Wyceny i Rozliczenia":
+elif menu == "settlements":
     st.title("💰 Centrum Rozliczeń Finansowych")
     st.caption("Zatwierdzaj wypłaty dla ekipy na podstawie jakości i postępów.")
     
@@ -2307,68 +2340,88 @@ elif menu == "8. 📈 Wyceny i Rozliczenia":
                     st.success("Wypłata zatwierdzona i zarchiwizowana!")
                     st.rerun()
 
-elif menu == "9. 🤝 Negocjacje i Planowanie":
-    st.title("🤝 Negocjacje i Planowanie")
-    st.write("Tutaj zatwierdzasz nowe roboty i negocjujesz wyceny z Karolem.")
+elif menu == "negotiations":
+    st.title("🤝 Centrum Negocjacji i Handshake")
+    st.write("Tu negocjujesz wyceny i blokujesz budżet robót.")
     
-    # Pobieramy wszystkie zadania i filtrujemy te z tagiem negocjacyjnym
+    # Pobieramy metadane projektu dla walidacji budżetu
+    p_meta = get_project_metadata()
+    total_budget = p_meta.get('total_budget', 0) if p_meta else 0
+
     try:
         all_tasks = supabase.table("tasks").select("*").execute().data or []
-        # Szukamy zadań, które mają tag negocjacyjny w opisie LUB status (jeśli kolumna istnieje)
-        tasks = [t for t in all_tasks if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '') or t.get('status') in ["PROPOSED_BY_CREW", "CHANGES_REQUESTED", "TO_BE_VALUED"]]
-        # Ale wykluczamy te już zaakceptowane (żeby nie wisiały w negocjacjach)
-        tasks = [t for t in tasks if "STATUS: ACCEPTED_LOCKED" not in (t.get('description') or '')]
+        # Szukamy zadań z tagiem, które NIE są jeszcze zablokowane (LOCKED)
+        tasks = [t for t in all_tasks if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '')]
+        tasks = [t for t in tasks if "COMMERCIAL: ACCEPTED_LOCKED" not in (t.get('description') or '')]
     except:
         tasks = []
         
     if not tasks:
-        st.info("Brak zadań wymagających negocjacji. Wszystko zatwierdzone!")
+        st.info("✅ Wszystkie wyceny zostały zatwierdzone. Brak oczekujących ofert.")
     else:
         for t in tasks:
             with st.container(border=True):
-                # Ekstrakcja danych z "zaszytego" tagu
                 desc_full = t.get('description', '') or ''
+                # Parsowanie Tagów 2.0
+                c_status = "PENDING"
+                e_status = "NOT_READY"
                 crew_p = 0
-                t_status = t.get('status', 'TO_BE_VALUED')
+                last_msg = ""
                 
-                if "CENA: " in desc_full:
-                    try: crew_p = float(desc_full.split("CENA: ")[1].split("\n")[0])
-                    except: pass
-                if "STATUS: " in desc_full:
-                    t_status = desc_full.split("STATUS: ")[1].split("\n")[0]
+                try:
+                    lines = desc_full.split("\n")
+                    for line in lines:
+                        if "COMMERCIAL:" in line: c_status = line.split(":")[1].strip()
+                        if "EXECUTION:" in line: e_status = line.split(":")[1].strip()
+                        if "CENA:" in line or "LOCKED_PRICE:" in line: 
+                            crew_p = float(line.split(":")[1].strip())
+                        if "LAST_COMMENT:" in line: last_msg = line.split(":")[1].strip()
+                except: pass
 
-                c1, c2 = st.columns([2, 1])
+                c1, c2, c3 = st.columns([2, 1, 1])
                 with c1:
-                    st.subheader(f"Zadanie: {t.get('name', 'Bez nazwy')}")
-                    st.write(f"Status: **{TASK_STATUSES.get(t_status, t_status)}**")
-                    # Pokazujemy tylko czysty opis (bez tagu)
+                    st.subheader(f"📍 {t.get('name', 'Bez nazwy')}")
+                    st.write(f"Status Finansowy: **{c_status}**")
                     clean_desc = desc_full.split("------------------------")[-1].strip() if "------------------------" in desc_full else desc_full
-                    st.write(f"Opis: {clean_desc}")
+                    st.write(f"Zakres: {clean_desc}")
+                    if last_msg: st.caption(f"💬 Ostatni komentarz: {last_msg}")
                 
                 with c2:
-                    st.markdown("### 📊 Wycena")
-                    st.metric("Cena Karola", f"{crew_p:,.2f} PLN")
+                    st.metric("Oferta Karola", f"{crew_p:,.2f} PLN")
                 
+                with c3:
+                    # Prosta walidacja budżetu (mockup)
+                    st.metric("Budżet Projektu", f"{total_budget:,.2f} PLN")
+
                 st.divider()
                 
-                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                col_a, col_b, col_c = st.columns(3)
                 
                 # Akcja 1: Akceptacja
-                if col_btn1.button(f"✅ ZAAKCEPTUJ ({crew_p} PLN)", key=f"acc_{t['id']}", type="primary"):
-                    if process_task_handshake(t['id'], "ACCEPT", "investor", price=crew_p):
-                        st.success("Zadanie zaakceptowane i zablokowane!")
+                if col_a.button(f"✅ ZAAKCEPTUJ ({crew_p} PLN)", key=f"acc_{t['id']}", type="primary"):
+                    if process_task_handshake(t['id'], "ACCEPT", "investor", price=crew_p, comment="Zaakceptowano ofertę Karola"):
+                        st.success("Zatwierdzono! Zadanie trafia na Kanban.")
                         st.rerun()
                 
                 # Akcja 2: Kontroferta
-                new_p = col_btn2.number_input("Moja cena", value=float(crew_p), step=50.0, key=f"price_{t['id']}")
-                note = col_btn3.text_input("Komentarz", placeholder="Uzasadnij zmianę...", key=f"note_{t['id']}")
+                new_p = col_b.number_input("Moja propozycja", value=float(crew_p), step=100.0, key=f"newp_{t['id']}")
+                msg = st.text_input("Powód korekty", key=f"msg_{t['id']}")
                 
-                if st.button(f"✏️ WYŚLIJ KOREKTĘ ({new_p} PLN)", key=f"corr_{t['id']}"):
-                    if process_task_handshake(t['id'], "COUNTER_OFFER", "investor", price=new_p, comment=note):
-                        st.success("Wysłano korektę do Karola.")
+                if col_b.button("↩️ WYŚLIJ KONTROFERTĘ", key=f"cnt_{t['id']}"):
+                    if process_task_handshake(t['id'], "COUNTER_OFFER", "investor", price=new_p, comment=msg):
+                        st.success("Wysłano Twoją propozycję do Karola.")
                         st.rerun()
+                
+                # Akcja 3: Lock Offline
+                with col_c:
+                    st.write("🤝 **Uzgodnione poza systemem?**")
+                    confirm_off = st.checkbox("Potwierdzam ustalenia", key=f"chk_{t['id']}")
+                    if st.button("🔒 ZABLOKUJ CENĘ", key=f"lockoff_{t['id']}", disabled=not confirm_off):
+                        if process_task_handshake(t['id'], "LOCK_OFFLINE", "investor", price=new_p, comment="Uzgodniono poza systemem"):
+                            st.success("Cena zablokowana i wprowadzona do budżetu.")
+                            st.rerun()
 
-elif menu == "10. ⚙️ Ustawienia Projektu":
+elif menu == "settings":
     st.title("⚙️ Ustawienia i Eksport")
     
     st.subheader("🏠 Zarządzanie Pomieszczeniami")
