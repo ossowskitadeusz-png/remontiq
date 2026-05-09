@@ -52,6 +52,70 @@ def update_project_metadata(project_id, **kwargs):
         kwargs['actual_end_date'] = kwargs['actual_end_date'].isoformat()
     supabase.table("project_metadata").update(kwargs).eq("id", project_id).execute()
 
+# ============================================
+# SPRINT 15: DASHBOARD EKIPY v2.0 (Backend)
+# ============================================
+
+def get_renovation_phases_summary() -> List[Dict]:
+    try:
+        response = supabase.table("renovation_phases").select("*").execute()
+        return response.data or []
+    except Exception as e:
+        st.error(f"❌ Błąd faz: {e}")
+        return []
+
+def start_task_timer(task_id: str, crew_member_id: str):
+    work_date = date.today().isoformat()
+    try:
+        existing = supabase.table("time_tracking").select("*").eq("task_id", task_id).eq("crew_member_id", crew_member_id).eq("work_date", work_date).execute()
+        if existing.data:
+            supabase.table("time_tracking").update({"start_time": datetime.now().time().isoformat()}).eq("id", existing.data[0]['id']).execute()
+        else:
+            supabase.table("time_tracking").insert({"task_id": task_id, "crew_member_id": crew_member_id, "work_date": work_date, "start_time": datetime.now().time().isoformat()}).execute()
+        return True
+    except Exception as e:
+        st.error(f"❌ Błąd timera: {e}")
+        return False
+
+def stop_task_timer(task_id: str, crew_member_id: str):
+    work_date = date.today().isoformat()
+    try:
+        res = supabase.table("time_tracking").select("*").eq("task_id", task_id).eq("crew_member_id", crew_member_id).eq("work_date", work_date).execute()
+        if res.data:
+            t = res.data[0]
+            start_dt = datetime.combine(date.today(), datetime.strptime(t['start_time'], "%H:%M:%S" if '.' not in t['start_time'] else "%H:%M:%S.%f").time())
+            end_dt = datetime.now()
+            if end_dt < start_dt: start_dt -= timedelta(days=1)
+            dur = (end_dt - start_dt).total_seconds() / 3600
+            supabase.table("time_tracking").update({"end_time": end_dt.time().isoformat(), "duration_hours": round(dur, 2)}).eq("id", t['id']).execute()
+            return round(dur, 2)
+        return 0
+    except Exception as e:
+        st.error(f"❌ Błąd stop: {e}")
+        return 0
+
+def calculate_weekly_bonus_v2(project_id: str, crew_member_id: str):
+    try:
+        today = date.today()
+        monday = (today - timedelta(days=today.weekday())).isoformat()
+        payroll = supabase.table("weekly_payroll").select("*").eq("project_id", project_id).eq("crew_member_id", crew_member_id).eq("week_start_date", monday).execute()
+        base = payroll.data[0]['base_weekly_salary'] if payroll.data else 2000
+        
+        ests = supabase.table("task_estimates").select("*").eq("project_id", project_id).eq("status", "ACCEPTED").execute().data or []
+        if not ests: return {"bonus_pct": 0, "bonus_amt": 0, "quality": 0, "base": base}
+        
+        acc = len([e for e in ests if e['completion_status'] == 'ACCEPTED'])
+        total = len(ests)
+        q_pct = (acc / total * 100) if total > 0 else 0
+        
+        if q_pct <= 60: b_pct = 0
+        elif q_pct <= 80: b_pct = 10
+        elif q_pct <= 95: b_pct = 25
+        else: b_pct = 50
+        
+        return {"bonus_pct": b_pct, "bonus_amt": base * (b_pct / 100), "quality": round(q_pct, 1), "base": base}
+    except: return {"bonus_pct": 0, "bonus_amt": 0, "quality": 0, "base": 2000}
+
 def get_project_days_info(project_meta):
     start = datetime.strptime(project_meta['planned_start_date'], "%Y-%m-%d").date()
     end = datetime.strptime(project_meta['planned_end_date'], "%Y-%m-%d").date()
