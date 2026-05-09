@@ -10,6 +10,96 @@ import plotly.graph_objects as go
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
 # ==========================================
+
+def apply_saas_theme():
+    """Wstrzykuje zaawansowany CSS dla profesjonalnego SaaS Layout."""
+    st.markdown("""
+    <style>
+        /* 1. Reset i Ukrywanie Elementów Streamlit */
+        header {visibility: hidden;}
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        .stDeployButton {display:none;}
+        
+        /* 2. Floating Top Bar */
+        .main-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 65px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            z-index: 999;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 30px;
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .logo-text {
+            font-size: 24px;
+            font-weight: 800;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .project-badge {
+            background: rgba(59, 130, 246, 0.1);
+            color: #60a5fa;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            margin-left: 20px;
+        }
+        
+        /* 3. Sidebar Styling */
+        [data-testid="stSidebar"] {
+            background-color: #f8fafc;
+            border-right: 1px solid #e2e8f0;
+            padding-top: 20px;
+        }
+        
+        /* 4. Kontener Treści */
+        .main .block-container {
+            padding-top: 80px;
+            max-width: 1200px;
+        }
+        
+        /* 5. Custom Sidebar Menu */
+        .stRadio [data-testid="stWidgetLabel"] {
+            display: none;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+def render_top_bar(project_name, user_role, user_name):
+    """Renderuje pływający pasek górny."""
+    role_emoji = "👤" if user_role == "Inwestor" else "👷"
+    st.markdown(f"""
+    <div class="main-header">
+        <div style="display: flex; align-items: center;">
+            <div class="logo-text">RemontIQ</div>
+            <div class="project-badge">📍 {project_name}</div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 20px;">
+            <div style="text-align: right;">
+                <div style="font-size: 13px; font-weight: 700;">{user_name}</div>
+                <div style="font-size: 11px; color: #94a3b8;">{role_emoji} {user_role}</div>
+            </div>
+            <div style="width: 35px; height: 35px; background: #3b82f6; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold;">
+                {user_name[0].upper()}
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Inicjalizacja stylu
+apply_saas_theme()
+
 @st.cache_resource
 def get_supabase() -> Client:
     url = st.secrets["supabase"]["url"]
@@ -1261,6 +1351,15 @@ if project_meta:
     st.sidebar.caption(f"Status: {project_meta['status']}")
 else:
     st.sidebar.warning("⚠️ Charter nie utworzony")
+
+# ==========================================
+# LAYOUT SaaS
+# ==========================================
+project_meta = get_project_metadata()
+proj_name = project_meta['project_name'] if project_meta else "Brak projektu"
+role_name = "Inwestor" if st.session_state['role'] == "investor" else "Ekipa (Karol)"
+
+render_top_bar(proj_name, role_name, st.session_state.get('user_name', 'Użytkownik'))
 
 menu = st.sidebar.radio("Nawigacja", [
     "1. Dashboard (Centrum)",
