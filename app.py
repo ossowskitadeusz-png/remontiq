@@ -122,6 +122,23 @@ except Exception as e:
     st.error("Błąd połączenia z Supabase. Sprawdź plik secrets.toml.")
     st.stop()
 
+# ============================================================================
+# IMPORTY SERWISÓW (Sprint 24 - Plan Remontu 2.0)
+# ============================================================================
+
+from services.phase_service import PhaseService
+from services.negotiation_service import NegotiationService
+from services.change_service import ChangeService
+
+# Inicjalizacja serwisów
+phase_service = PhaseService(supabase)
+negotiation_service = NegotiationService(supabase)
+change_service = ChangeService(supabase)
+
+# Importy nowych paneli (Sprint 24)
+from pages.crew_panel import render_crew_panel
+from pages.investor_panel import render_investor_panel
+
 def read_table(table_name, select="*", filters=None, order_by=None):
     query = supabase.table(table_name).select(select)
     if filters:
@@ -427,50 +444,100 @@ def render_crew_dashboard(project_id: str, crew_member_id: str, crew_name: str =
                             st.rerun()
 
     with tab_plan:
-        st.markdown("### 🏗️ Buduj Plan Remontu")
-        st.write("Tu dodajesz zadania, które Inwestor zobaczy w swoim Centrum Kontroli.")
+        st.markdown("### 🏗️ Plan Remontu 2.0")
+        st.write("Buduj strukturę projektu, dodawaj fazy i wyceniaj zadania.")
         
-        with st.expander("➕ DODAJ NOWE ZADANIE", expanded=True):
-            with st.form("new_task_by_crew", clear_on_submit=True):
-                t_name = st.text_input("Nazwa zadania (np. Gładzie w salonie)")
-                t_phase = st.selectbox("Faza", ["1. Demolka", "2. Elektryka", "3. Hydraulika", "4. Ściany/Sufity", "5. Łazienka", "6. Podłogi", "7. Montaż końcowy"])
-                t_diff = st.select_slider("Trudność (Wpływa na Twoją stawkę)", options=["EASY", "MEDIUM", "HARD"], value="MEDIUM")
-                t_hours = st.number_input("Ile godzin to zajmie? (Estymacja)", min_value=1, value=8)
-                t_desc = st.text_area("Uwagi do zadania (dla Inwestora)")
+        # --- SEKCJA: DODAWANIE FAZY ---
+        with st.expander("➕ NOWA FAZA PROJEKTU", expanded=False):
+            with st.form("new_phase_form"):
+                p_name = st.text_input("Nazwa fazy (np. Elektryka - stan surowy)")
+                pc1, pc2 = st.columns(2)
+                p_start = pc1.date_input("Planowany start")
+                p_end = pc2.date_input("Planowany koniec", value=date.today() + timedelta(days=7))
+                p_budget = st.number_input("Budżet szacunkowy fazy (PLN)", min_value=0, value=5000)
                 
-                if st.form_submit_button("🚀 DODAJ DO PLANU", use_container_width=True):
-                    if t_name:
-                        new_task = {
-                            "project_id": project_id,
-                            "task_name": t_name,
-                            "name": t_name,
-                            "description": t_desc,
-                            "phase_name": t_phase,
-                            "difficulty": t_diff,
-                            "estimated_hours": t_hours,
-                            "kanban_status": "TODO",
-                            "created_by_crew": True
-                        }
-                        supabase.table("tasks").insert(new_task).execute()
-                        st.success(f"Dodano zadanie: {t_name}")
-                        st.rerun()
-                    else: st.error("Podaj nazwę zadania!")
+                if st.form_submit_button("📁 UTWÓRZ FAZĘ", use_container_width=True):
+                    if p_name:
+                        # Pobierz liczbę faz aby ustalić numer
+                        current_phases = phase_service.get_phases(project_id)
+                        next_num = len(current_phases) + 1
+                        
+                        res = phase_service.create_phase(
+                            project_id=project_id,
+                            phase_name=p_name,
+                            phase_number=next_num,
+                            planned_start_date=p_start.isoformat(),
+                            planned_end_date=p_end.isoformat(),
+                            estimated_budget=p_budget,
+                            created_by_crew_id=crew_member_id
+                        )
+                        if res["success"]:
+                            st.success(f"Utworzono fazę: {p_name}")
+                            st.rerun()
+                        else: st.error(f"Błąd: {res.get('error')}")
+                    else: st.error("Podaj nazwę fazy!")
+
+        # --- SEKCJA: DODAWANIE ZADANIA ---
+        phases = phase_service.get_phases(project_id)
+        if not phases:
+            st.warning("Najpierw utwórz chociaż jedną fazę powyżej, aby móc dodawać zadania.")
+        else:
+            with st.expander("➕ DODAJ ZADANIE DO FAZY", expanded=True):
+                with st.form("new_task_2_0"):
+                    t_name = st.text_input("Nazwa zadania")
+                    t_phase_obj = st.selectbox("Wybierz fazę", phases, format_func=lambda x: f"{x['phase_number']}. {x['phase_name']}")
+                    t_price = st.number_input("Twoja wycena (PLN)", min_value=0, value=500)
+                    t_hours = st.number_input("Ile godzin?", min_value=1, value=8)
+                    t_desc = st.text_area("Opis / Notatki")
+                    
+                    if st.form_submit_button("🚀 WYŚLIJ PROPOZYCJĘ DO INWESTORA", use_container_width=True):
+                        if t_name:
+                            new_task = {
+                                "project_id": project_id,
+                                "phase_id": t_phase_obj['id'],
+                                "phase_name": t_phase_obj['phase_name'],
+                                "name": t_name,
+                                "task_name": t_name,
+                                "description": t_desc,
+                                "crew_price": t_price,
+                                "estimated_hours": t_hours,
+                                "commercial_status": "PROPOSED_BY_CREW",
+                                "kanban_status": "TODO",
+                                "created_by_crew": True
+                            }
+                            supabase.table("tasks").insert(new_task).execute()
+                            st.success(f"Zadanie '{t_name}' wysłane do akceptacji!")
+                            st.rerun()
+                        else: st.error("Podaj nazwę zadania!")
 
         st.markdown("---")
-        st.subheader("🗺️ Przegląd wszystkich faz")
-        all_tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
-        if all_tasks:
-            df_plan = pd.DataFrame(all_tasks)
-            for phase, group in df_plan.groupby("phase_name"):
-                with st.expander(f"📍 {phase} ({len(group)} zadań)"):
-                    for _, row in group.iterrows():
-                        task_label = row.get('name') or row.get('task_name') or "Bez nazwy"
-                        diff = row.get('difficulty', 'MEDIUM')
-                        hours = row.get('estimated_hours', 0)
-                        status = row.get('kanban_status', 'TODO')
-                        st.write(f"- {task_label} ({diff} | {hours}h) - **{status}**")
+        st.subheader("📋 Twoja Mapa Remontu")
+        
+        if not phases:
+            st.info("Brak faz. Zacznij od dodania nowej fazy.")
         else:
-            st.info("Plan jest jeszcze pusty. Dodaj pierwsze zadania powyżej.")
+            all_tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
+            df_tasks = pd.DataFrame(all_tasks) if all_tasks else pd.DataFrame()
+            
+            for p in phases:
+                progress = phase_service.get_phase_progress(p['id'])
+                financial = phase_service.get_phase_financial_status(p['id'])
+                
+                with st.container(border=True):
+                    k1, k2, k3 = st.columns([2, 1, 1])
+                    k1.markdown(f"#### {p['phase_number']}. {p['phase_name']}")
+                    k2.metric("Postęp", f"{progress['progress_percent']}%")
+                    k3.metric("Est. Zarobek", f"{p['estimated_budget']} PLN")
+                    
+                    # Filtruj zadania dla tej fazy
+                    if not df_tasks.empty:
+                        phase_tasks = df_tasks[df_tasks['phase_id'] == p['id']]
+                        if not phase_tasks.empty:
+                            for _, t in phase_tasks.iterrows():
+                                status_icon = "⏳" if t['commercial_status'] == "PROPOSED_BY_CREW" else "✅" if t['commercial_status'] == "ACCEPTED_LOCKED" else "❌"
+                                st.write(f"{status_icon} **{t['name']}** | {t['crew_price']} PLN | `{t['commercial_status']}`")
+                        else:
+                            st.caption("Brak zadań w tej fazie.")
 
     # 4️⃣ CENTRUM ZGŁOSZEŃ (Globalne)
     with st.sidebar:
@@ -1582,6 +1649,7 @@ if st.session_state['role'] == "crew":
     
     st.sidebar.divider()
     menu = st.sidebar.radio("👷 NAWIGACJA", [
+        "🏗️ Plan Remontu 2.0",
         "🚀 Plan na dzisiaj",
         "🚨 Blokady i Materiały",
         "💬 Czat Budowy"
@@ -1598,23 +1666,25 @@ if st.session_state['role'] == "crew":
 else:
     # Definicja stron Inwestora (Klucz techniczny : Etykieta widoczna)
     INVESTOR_PAGES = {
-        "dashboard": "1. 🏠 Dashboard Inwestora",
-        "tasks": "2. 📋 Plan Remontu (Zadania)",
-        "crew_view": "3. 👷 Widok Ekipy",
-        "schedule": "4. 📅 Harmonogram",
-        "budget": "5. 💰 Budżet i Wydatki",
-        "crews": "6. 👷 Ekipy i Wykonawcy",
-        "journal": "7. 📒 Dziennik Projektu (Decyzje/Ryzyka)",
-        "settlements": "8. 📈 Wyceny i Rozliczenia",
-        "negotiations": "9. 🤝 Negocjacje i Planowanie",
-        "settings": "10. ⚙️ Ustawienia Projektu",
-        "charter": "0. Charter Projektu",
+        "investor_2_0": "⭐ 1. CENTRUM DOWODZENIA 2.0",
+        "old_dashboard": "🏠 2. Dashboard (Widok klasyczny)",
+        "tasks": "📋 3. Plan Remontu (Zadania)",
+        "crew_view": "👷 4. Widok Ekipy",
+        "schedule": "📅 5. Harmonogram",
+        "budget": "💰 6. Budżet i Wydatki",
+        "crews": "👥 7. Ekipy i Wykonawcy",
+        "journal": "📒 8. Dziennik Projektu",
+        "settlements": "📈 9. Wyceny i Rozliczenia",
+        "negotiations": "🤝 10. Negocjacje i Handshake",
+        "settings": "⚙️ 11. Ustawienia Projektu",
+        "charter": "🏗️ 0. Charter Projektu",
         "logout": "🚪 Wyloguj"
     }
     
     selected_key = st.sidebar.radio(
         "Nawigacja", 
         options=list(INVESTOR_PAGES.keys()),
+        index=0,  # Wymusza wybór pierwszej opcji (Centrum Dowodzenia 2.0)
         format_func=lambda x: INVESTOR_PAGES[x]
     )
     menu = selected_key # Mapujemy dla kompatybilności wstecznej
@@ -1888,7 +1958,10 @@ if st.session_state['role'] == "crew":
             st.rerun()
         st.stop()
 
-    if menu == "🚀 Plan na dzisiaj":
+    if menu == "🏗️ Plan Remontu 2.0":
+        render_crew_panel(supabase, phase_service, negotiation_service, change_service)
+
+    elif menu == "🚀 Plan na dzisiaj":
         render_crew_dashboard(p_id, "KAROL_ID", "Karol")
         
     elif menu == "🚨 Blokady i Materiały":
@@ -1906,7 +1979,10 @@ rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
 for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
-if menu == "3. 👷 DASHBOARD EKIPY (v2.0)":
+if menu == "investor_2_0":
+    render_investor_panel(supabase, phase_service, negotiation_service, change_service)
+
+elif menu == "old_dashboard":
     p_meta = get_project_metadata()
     if p_meta:
         render_crew_dashboard(p_meta['id'], "KAROL_ID", "Karol") # KAROL_ID jako placeholder
@@ -2017,9 +2093,9 @@ elif menu == "charter":
         elif project_meta['status'] == "COMPLETED":
             st.success("✅ **Status: UKOŃCZONY**")
 
-elif menu == "dashboard":
-    st.title("🎮 COMMAND CENTER")
-    st.caption(f"Centrum kontroli projektu — {date.today().strftime('%d.%m.%Y')}")
+
+elif menu == "dashboard_view":  # Nazwa tymczasowa, jeśli będziesz chciał tu coś jeszcze dodać
+    pass
 
     # ==============================
     # DANE
