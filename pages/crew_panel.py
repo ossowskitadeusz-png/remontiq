@@ -102,59 +102,62 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
 
 def render_new_proposal_form(supabase, negotiation_service, project_id):
     """
-    Formularz do wysłania nowej propozycji ceny.
+    Formularz do wysłania nowej propozycji ceny - pozwala na tworzenie NOWYCH robót.
     """
+    st.markdown("### 📝 Dodaj nową robotę i wyceń")
+    st.caption("Tutaj dodajesz nową pozycję do planu remontu i od razu proponujesz za nią cenę.")
     
-    # Pobierz zadania bez aktywnych negocjacji
-    all_tasks = supabase.table("tasks").select("id, name, phase_id, final_approved_price").eq(
-        "project_id", project_id
-    ).execute().data
-    
-    if not all_tasks:
-        st.warning("Brak zadań w tym projekcie")
-        return
-    
-    # Filtruj: pokaż tylko zadania bez zaakceptowanej ceny lub bez aktywnej negocjacji
-    available_tasks = []
-    for task in all_tasks:
-        if task.get('final_approved_price'):
-            continue
-            
-        active_neg = supabase.table("negotiations").select("id").eq(
-            "task_id", task['id']
-        ).in_("status", ["pending", "counter_offer"]).execute()
+    with st.form("form_create_and_quote_task"):
+        t_name = st.text_input("Nazwa roboty (np. Podwieszany sufit) *")
+        t_desc = st.text_area("Opis techniczny (opcjonalnie)")
         
-        if not active_neg.data:
-            available_tasks.append(task)
-            
-    if not available_tasks:
-        st.info("✅ Wszystkie zadania mają już ustalone ceny lub czekające propozycje!")
-        return
+        col1, col2 = st.columns(2)
+        proposed_price = col1.number_input("💰 Proponowana cena (zł) *", min_value=0.0, step=100.0, value=500.0)
+        proposed_duration = col2.number_input("⏱️ Szacunkowy czas (dni)", min_value=1, step=1, value=1)
         
-    st.markdown("### 📝 Formularz Wyceny")
-    
-    with st.form("new_proposal_form"):
-        task_options = {t['name']: t['id'] for t in available_tasks}
-        selected_task_name = st.selectbox("🔨 Wybierz zadanie", options=list(task_options.keys()))
-        selected_task_id = task_options[selected_task_name]
+        proposed_notes = st.text_area("📝 Dodatkowe notatki dla Inwestora (opcjonalnie)")
         
-        proposed_price = st.number_input("💰 Proponowana cena (zł)", min_value=0.0, step=100.0, value=1000.0)
-        proposed_duration = st.number_input("⏱️ Szacunkowy czas (dni)", min_value=1, step=1, value=5)
-        proposed_notes = st.text_area("📝 Notatki (opcjonalnie)", placeholder="np. Wliczone materiały, robocizna...")
-        
-        if st.form_submit_button("📤 Wyślij Wycenę", use_container_width=True):
-            success, message, neg_id = negotiation_service.propose_price(
-                task_id=selected_task_id,
-                proposed_by='crew',
-                price=proposed_price,
-                duration_days=int(proposed_duration),
-                notes=proposed_notes
-            )
-            if success:
-                st.success(message)
-                st.rerun()
+        if st.form_submit_button("📤 Utwórz i Wyślij Wycenę", use_container_width=True):
+            if not t_name or proposed_price <= 0:
+                st.error("Podaj nazwę roboty i cenę większą niż 0!")
             else:
-                st.error(message)
+                try:
+                    # 1. Tworzymy nowe ZADANIE (Task) w bazie
+                    u_id = st.session_state.get('user_id')
+                    task_payload = {
+                        "project_id": project_id,
+                        "name": t_name,
+                        "description": t_desc,
+                        "kanban_status": "BACKLOG",
+                        "commercial_status": "not_started",
+                        "execution_status": "NOT_READY"
+                    }
+                    if u_id:
+                        task_payload["created_by"] = u_id
+                        
+                    task_res = supabase.table("tasks").insert(task_payload).execute()
+                    
+                    if task_res.data:
+                        new_task_id = task_res.data[0]['id']
+                        
+                        # 2. Odpalamy Handshake 2.0 dla nowego zadania
+                        success, message, neg_id = negotiation_service.propose_price(
+                            task_id=new_task_id,
+                            proposed_by='crew',
+                            price=proposed_price,
+                            duration_days=int(proposed_duration),
+                            notes=proposed_notes
+                        )
+                        
+                        if success:
+                            st.success(f"✅ Dodano robotę i wysłano wycenę!")
+                            st.rerun()
+                        else:
+                            st.error(f"Zadanie utworzone, ale błąd negocjacji: {message}")
+                    else:
+                        st.error("Błąd zapisu do bazy zadań.")
+                except Exception as e:
+                    st.error(f"Wystąpił błąd podczas komunikacji z serwerem: {str(e)}")
 
 def render_crew_pending_card(neg, negotiation_service):
     task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')
