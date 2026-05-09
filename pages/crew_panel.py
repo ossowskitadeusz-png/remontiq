@@ -15,7 +15,13 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     Premium Panel Karola - Zarządzanie pracami, wycenami i negocjacjami.
     """
     
-    st.header("👷 Panel Ekipy (Karol)")
+    col_title, col_refresh = st.columns([5, 1])
+    with col_title:
+        st.header("👷 Panel Ekipy (Karol)")
+    with col_refresh:
+        if st.button("🔄 Odśwież Dane", use_container_width=True):
+            st.rerun()
+            
     st.markdown("---")
     
     # Inicjalizacja serwisów
@@ -107,7 +113,7 @@ def render_new_proposal_form(supabase, negotiation_service, project_id):
     st.markdown("### 📝 Dodaj nową robotę i wyceń")
     st.caption("Tutaj dodajesz nową pozycję do planu remontu i od razu proponujesz za nią cenę.")
     
-    with st.form("form_create_and_quote_task"):
+    with st.form("form_create_and_quote_task", clear_on_submit=True):
         t_name = st.text_input("Nazwa roboty (np. Podwieszany sufit) *")
         t_desc = st.text_area("Opis techniczny (opcjonalnie)")
         

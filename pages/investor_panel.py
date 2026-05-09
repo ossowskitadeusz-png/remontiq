@@ -16,7 +16,13 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     Premium Panel Inwestora - Zarządzanie negocjacjami, zmianami, timeline'em.
     """
     
-    st.header("💎 Panel Inwestora (Ty)")
+    col_title, col_refresh = st.columns([5, 1])
+    with col_title:
+        st.header("💎 Panel Inwestora (Ty)")
+    with col_refresh:
+        if st.button("🔄 Odśwież Dane", use_container_width=True):
+            st.rerun()
+            
     st.markdown("---")
     
     if not supabase:
@@ -68,7 +74,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     st.markdown("---")
     
     # 3. TABY
-    tab_negotiations, tab_changes, tab_timeline, tab_budget = st.tabs(["💰 Negocjacje Cen", "📝 Wnioski o Zmiany", "📅 Timeline", "📊 Analiza Budżetu"])
+    tab_negotiations, tab_changes, tab_budget = st.tabs(["💰 Negocjacje Cen", "📝 Wnioski o Zmiany", "📊 Analiza Budżetu"])
     
     with tab_negotiations:
         st.subheader("💰 Negocjacje Cen - Handshake")
@@ -104,13 +110,6 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
             for change in changes:
                 render_change_card(change, change_service)
 
-    with tab_timeline:
-        st.subheader("📅 Timeline Projektu")
-        phases = phase_service.get_phases(selected_project_id)
-        if phases:
-            for idx, p in enumerate(phases):
-                st.write(f"**{idx+1}. {p['phase_name']}** ({p.get('status', 'not_started')})")
-
     with tab_budget:
         st.subheader("📊 Analiza Budżetu")
         st.write(f"Wydano {spent:,.0f} zł z {total_budget:,.0f} zł")
@@ -135,8 +134,12 @@ def render_negotiation_card(neg, negotiation_service, key_suffix=""):
             if neg.get('response_price'):
                 st.warning(f"TWOJA KONTRA: {neg['response_price']:,.0f} zł")
         with col3:
-            st.caption(f"Status: {neg['status']}")
+            st.metric("Czas realizacji", f"{neg.get('proposed_duration_days', '?')} dni")
+            
+        if neg.get('proposed_notes'):
+            st.info(f"👷 **Wiadomość od Karola:** {neg['proposed_notes']}")
 
+        st.markdown("---")
         b1, b2, b3 = st.columns(3)
         with b1:
             if st.button("✅ Akceptuj", key=f"btn_acc_{neg_id}_{key_suffix}", use_container_width=True):
