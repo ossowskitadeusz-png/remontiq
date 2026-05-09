@@ -150,6 +150,50 @@ def calculate_quality_score(tasks_accepted: int, total_tasks: int, blockers: int
         "breakdown": {"acceptance": round(acc_score), "schedule": round(sched_score), "blockers": round(block_score)}
     }
 
+# --- STATUSY NEGOCJACYJNE (Handshake Workflow) ---
+TASK_STATUSES = {
+    "DRAFT": "📝 Szkic",
+    "TO_BE_VALUED": "❓ Do wyceny (Karol)",
+    "PROPOSED_BY_CREW": "👷 Propozycja Karola",
+    "CHANGES_REQUESTED": "✏️ Korekta Inwestora",
+    "ACCEPTED_LOCKED": "🔒 Zaakceptowane",
+    "ACTIVE": "🚀 W realizacji",
+    "DONE": "✅ Zakończone"
+}
+
+def process_task_handshake(task_id, action, actor_role, price=None, comment=""):
+    """Obsługuje logikę uścisku dłoni między Inwestorem a Karolem."""
+    try:
+        update_data = {"updated_at": datetime.now().isoformat()}
+        
+        if action == "SUBMIT_VALUATION" and actor_role == "crew":
+            update_data.update({
+                "status": "PROPOSED_BY_CREW",
+                "crew_price": price,
+                "crew_comment": comment
+            })
+        elif action == "ACCEPT" and actor_role == "investor":
+            update_data.update({
+                "status": "ACCEPTED_LOCKED",
+                "locked_price": price,
+                "kanban_status": "TODO" # Automatycznie trafia na tablicę
+            })
+        elif action == "COUNTER_OFFER" and actor_role == "investor":
+            update_data.update({
+                "status": "CHANGES_REQUESTED",
+                "investor_price": price,
+                "investor_comment": comment
+            })
+            
+        supabase.table("tasks").update(update_data).eq("id", task_id).execute()
+        
+        # Logujemy to w historii projektu
+        add_activity_log(actor_role, f"TASK_HANDSHAKE: {action}", "ALL", f"Zadanie {task_id}: {price} PLN | {comment}")
+        return True
+    except Exception as e:
+        st.error(f"Błąd Handshake: {e}")
+        return False
+
 def get_project_metadata():
     try:
         res = supabase.table("project_metadata").select("*").order("created_at", desc=True).limit(1).execute()
@@ -1364,20 +1408,19 @@ if st.session_state['role'] == "crew":
         logout()
         st.rerun()
 else:
-    menu = st.sidebar.radio("🏠 MENU INWESTORA", [
-        "1. Dashboard (Centrum)",
-        "1a. Centrum Komunikacji",
-        "2. Start remontu",
+    menu = st.sidebar.radio("Nawigacja", [
+        "1. 🏠 Dashboard Inwestora",
+        "2. 📋 Plan Remontu (Zadania)",
         "3. 👷 Widok Ekipy",
-        "4. Zadania",
-        "4a. Odbiór Prac",
-        "5. Ekipa",
-        "6. Wydatki (Finanse)",
-        "7. Dziennik Projektu",
+        "4. 📅 Harmonogram",
+        "5. 💰 Budżet i Wydatki",
+        "6. 👷 Ekipy i Wykonawcy",
+        "7. 📒 Dziennik Projektu (Decyzje/Ryzyka)",
         "8. 📈 Wyceny i Rozliczenia",
-        "9. Ustawienia",
+        "9. 🤝 Negocjacje i Planowanie",
+        "10. ⚙️ Ustawienia Projektu",
         "0. Charter Projektu",
-        "10. 🚪 Wyloguj"
+        "🚪 Wyloguj"
     ])
 
 # 4. Globalna Logika Wylogowania
@@ -1426,24 +1469,61 @@ if st.session_state['role'] == "crew":
         tab_valuation, tab_settlement = st.tabs(["📐 WYCENA ETAPÓW", "💸 ROZLICZENIE OKRESOWE"])
         
         with tab_valuation:
-            st.subheader("Analiza wyceny zadań")
+            st.subheader("🛠️ Planowanie i Wycena Robót")
+            
+            # --- FORMULARZ DODAWANIA ZADANIA PRZEZ KAROLA ---
+            with st.expander("➕ DODAJ NOWĄ ROBOTĘ / ETAP"):
+                with st.form("form_crew_add_task"):
+                    t_title = st.text_input("Nazwa roboty *")
+                    t_desc = st.text_area("Opis techniczny")
+                    col_p1, col_p2 = st.columns(2)
+                    t_price = col_p1.number_input("Twoja wycena (PLN) *", min_value=0.0, step=100.0)
+                    t_hours = col_p2.number_input("Szacowane godziny", min_value=1.0, step=1.0)
+                    
+                    if st.form_submit_button("Weryfikuj i wyślij do Inwestora"):
+                        if t_title and t_price > 0:
+                            supabase.table("tasks").insert({
+                                "project_id": p_id,
+                                "name": t_title,
+                                "description": t_desc,
+                                "crew_price": t_price,
+                                "estimated_hours": t_hours,
+                                "status": "PROPOSED_BY_CREW",
+                                "kanban_status": "BACKLOG"
+                            }).execute()
+                            st.success("✅ Wysłano propozycję do Inwestora!")
+                            st.rerun()
+                        else:
+                            st.error("Podaj nazwę i cenę!")
+
+            st.divider()
+            
+            # --- LISTA ZADAŃ DO WYCENY / NEGOCJACJI ---
+            st.write("### Twoje zadania i negocjacje")
             tasks = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
+            
             if tasks:
-                df_f = pd.DataFrame(tasks)
-                # Mapowanie stawek
-                rates = {"EASY": 80, "MEDIUM": 100, "HARD": 150}
-                df_f['stawka'] = df_f['difficulty'].map(rates)
-                df_f['wartosc'] = df_f['stawka'] * df_f['estimated_hours']
-                
-                st.dataframe(df_f[['phase_name', 'name', 'difficulty', 'estimated_hours', 'wartosc']], 
-                             column_config={
-                                 "wartosc": st.column_config.NumberColumn("Wycena (PLN)", format="%.2f zł")
-                             }, hide_index=True, use_container_width=True)
-                
-                total_val = df_f['wartosc'].sum()
-                st.metric("Całkowita wartość Twoich prac", f"{total_val} PLN")
+                for t in tasks:
+                    # Pokazujemy tylko te, które nie są jeszcze zatwierdzone
+                    if t['status'] in ["TO_BE_VALUED", "PROPOSED_BY_CREW", "CHANGES_REQUESTED"]:
+                        with st.container(border=True):
+                            c1, c2 = st.columns([3, 1])
+                            with c1:
+                                st.write(f"**{t['name']}**")
+                                st.caption(f"Status: {TASK_STATUSES.get(t['status'], t['status'])}")
+                                if t['status'] == "CHANGES_REQUESTED":
+                                    st.warning(f"💬 Inwestor proponuje: {t.get('investor_price')} PLN. Komentarz: {t.get('investor_comment', '-')}")
+                            
+                            with c2:
+                                if t['status'] == "TO_BE_VALUED":
+                                    new_val = st.number_input("Wyceń (PLN)", key=f"val_{t['id']}")
+                                    if st.button("Wyślij wycenę", key=f"btn_val_{t['id']}"):
+                                        process_task_handshake(t['id'], "SUBMIT_VALUATION", "crew", price=new_val)
+                                        st.rerun()
+                                else:
+                                    st.write(f"{t.get('crew_price', 0)} PLN")
             else:
-                st.info("Brak zadań do wyceny.")
+                st.info("Brak aktywnych zadań w planie.")
 
         with tab_settlement:
             st.subheader("Wniosek o wypłatę (Dynamiczny Limit)")
@@ -2179,7 +2259,52 @@ elif menu == "8. 📈 Wyceny i Rozliczenia":
                     st.success("Wypłata zatwierdzona i zarchiwizowana!")
                     st.rerun()
 
-elif menu == "8. Ustawienia":
+elif menu == "9. 🤝 Negocjacje i Planowanie":
+    st.title("🤝 Negocjacje i Planowanie")
+    st.write("Tutaj zatwierdzasz nowe roboty i negocjujesz wyceny z Karolem.")
+    
+    # Pobieramy zadania w statusach negocjacyjnych
+    try:
+        tasks = supabase.table("tasks").select("*").in_("status", ["PROPOSED_BY_CREW", "CHANGES_REQUESTED", "TO_BE_VALUED"]).execute().data or []
+    except:
+        tasks = []
+        
+    if not tasks:
+        st.info("Brak zadań wymagających negocjacji. Wszystko zatwierdzone!")
+    else:
+        for t in tasks:
+            with st.container(border=True):
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    st.subheader(f"Zadanie: {t.get('name', t.get('title', 'Bez nazwy'))}")
+                    st.write(f"Status: **{TASK_STATUSES.get(t['status'], t['status'])}**")
+                    st.write(f"Opis: {t.get('description', 'Brak opisu')}")
+                
+                with c2:
+                    st.markdown("### 📊 Wycena")
+                    crew_p = t.get('crew_price', 0) or 0
+                    st.metric("Cena Karola", f"{crew_p:,.2f} PLN")
+                
+                st.divider()
+                
+                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                
+                # Akcja 1: Akceptacja
+                if col_btn1.button(f"✅ ZAAKCEPTUJ ({crew_p} PLN)", key=f"acc_{t['id']}", type="primary"):
+                    if process_task_handshake(t['id'], "ACCEPT", "investor", price=crew_p):
+                        st.success("Zadanie zaakceptowane i zablokowane!")
+                        st.rerun()
+                
+                # Akcja 2: Kontroferta
+                new_p = col_btn2.number_input("Moja cena", value=float(crew_p), step=50.0, key=f"price_{t['id']}")
+                note = col_btn3.text_input("Komentarz", placeholder="Uzasadnij zmianę...", key=f"note_{t['id']}")
+                
+                if st.button(f"✏️ WYŚLIJ KOREKTĘ ({new_p} PLN)", key=f"corr_{t['id']}"):
+                    if process_task_handshake(t['id'], "COUNTER_OFFER", "investor", price=new_p, comment=note):
+                        st.success("Wysłano korektę do Karola.")
+                        st.rerun()
+
+elif menu == "10. ⚙️ Ustawienia Projektu":
     st.title("⚙️ Ustawienia i Eksport")
     
     st.subheader("🏠 Zarządzanie Pomieszczeniami")
