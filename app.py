@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-008"
+APP_VERSION = "sprint23-50-100-deploy-fix-009"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
