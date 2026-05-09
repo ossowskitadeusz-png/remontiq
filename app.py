@@ -1559,9 +1559,15 @@ if st.session_state['role'] == "crew":
                             
                             # KROK KRYTYCZNY: Dodajemy autora dla RLS
                             u_id = st.session_state.get('user_id')
+                            session = supabase.auth.get_session()
+                            
+                            if not session:
+                                st.warning("⚠️ Uwaga: Brak aktywnej sesji technicznej w Supabase (Session Valid: False).")
+                                st.info("Jeśli błąd 42501 nadal występuje, wykonaj w SQL Editor: `ALTER TABLE tasks DISABLE ROW LEVEL SECURITY;` lub użyj SERVICE_ROLE_KEY.")
+                            
                             if u_id:
                                 payload["created_by"] = u_id
-                                payload["user_id"] = u_id # Fallback dla różnych nazw kolumn
+                                payload["user_id"] = u_id
                             
                             if p_id:
                                 payload["project_id"] = p_id
