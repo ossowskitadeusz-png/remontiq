@@ -126,6 +126,9 @@ def render_negotiation_card(neg, negotiation_service, key_suffix=""):
     
     with st.container(border=True):
         st.markdown(f"### 🔨 {task_name}")
+        task_desc = neg.get('tasks', {}).get('description')
+        if task_desc:
+            st.caption(f"**Opis techniczny:** {task_desc}")
         
         col1, col2, col3 = st.columns(3)
         with col1:

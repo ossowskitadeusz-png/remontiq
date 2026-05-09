@@ -1861,7 +1861,7 @@ if st.session_state['role'] == "crew":
             if fin.get('is_advance_capped'):
                 st.warning(f"⚠️ Zastosowano globalny limit zaliczek (30% budżetu). Część zaliczkowa została ograniczona.")
 
-            with st.form("payment_request_form_A_plus"):
+            with st.form("payment_request_form_A_plus", clear_on_submit=True):
                 st.write("### 📤 Nowy wniosek")
                 req_amount = st.number_input("Kwota wniosku (PLN)", min_value=0.0, step=100.0, format="%.2f")
                 req_note = st.text_area("Uzasadnienie / Cel wypłaty", placeholder="Np. Zakup materiałów, rozliczenie etapu...")
@@ -1902,8 +1902,11 @@ if st.session_state['role'] == "crew":
                         }
                         
                         # Zapisujemy jako wniosek o płatność
+                        u_id = st.session_state.get('user_id')
                         supabase.table("project_logs").insert({
                             "project_id": p_id,
+                            "user_id": u_id,
+                            "created_by": u_id,
                             "type": "payment_request",
                             "title": f"Wniosek ({payment_type}): {money(req_amount)}",
                             "description": req_note,
@@ -1919,7 +1922,7 @@ if st.session_state['role'] == "crew":
                         st.rerun()
 
             st.divider()
-            with st.form("material_reimbursement_form"):
+            with st.form("material_reimbursement_form", clear_on_submit=True):
                 st.write("### 🛒 Zwrot za materiały")
                 st.caption("Użyj tego formularza, jeśli kupiłeś materiały za własne pieniądze.")
                 reimb_amount = st.number_input("Kwota z paragonu/faktury (PLN)", min_value=0.0, step=10.0)
@@ -1934,8 +1937,11 @@ if st.session_state['role'] == "crew":
                             "payment_type": "REIMBURSEMENT",
                             "timestamp": datetime.now().isoformat()
                         }
+                        u_id = st.session_state.get('user_id')
                         supabase.table("project_logs").insert({
                             "project_id": p_id,
+                            "user_id": u_id,
+                            "created_by": u_id,
                             "type": "payment_request",
                             "title": f"Zwrot za materiały: {money(reimb_amount)}",
                             "description": reimb_note,
