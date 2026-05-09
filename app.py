@@ -1371,6 +1371,23 @@ if "Wyloguj" in menu:
 if st.session_state['role'] == "crew":
     p_id = project_meta.get('id') if project_meta else None
     
+    # --- EKRAN POWITALNY (Splash) ---
+    if "splash_done" not in st.session_state: st.session_state.splash_done = False
+    
+    if not st.session_state.splash_done:
+        st.markdown(f"""
+        <div style="height: 70vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 30px; color: white; text-align: center; padding: 40px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);">
+            <div style="font-size: 100px; margin-bottom: 20px;">🏗️</div>
+            <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY KAROL!</h1>
+            <p style="font-size: 24px; opacity: 0.8; margin-top: 10px;">Dziś jest {datetime.now().strftime('%A, %d.%m.%Y')}</p>
+            <p style="font-size: 18px; margin-top: 30px; font-style: italic;">"Dobry plan to połowa sukcesu."</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("🚀 WEJDŹ NA BUDOWĘ", use_container_width=True, type="primary"):
+            st.session_state.splash_done = True
+            st.rerun()
+        st.stop()
+    
     # Obsługa przycisków funkcyjnych
     if st.session_state.get('crew_menu_active') == "planowanie":
         st.title("📅 Planowanie Remontu")
@@ -1431,20 +1448,6 @@ if st.session_state['role'] == "crew":
         st.stop()
 
     if menu == "🚀 Plan na dzisiaj":
-        if "splash_done" not in st.session_state: st.session_state.splash_done = False
-        if not st.session_state.splash_done:
-            st.markdown(f"""
-            <div style="height: 60vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 30px; color: white; text-align: center; padding: 40px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);">
-                <div style="font-size: 100px; margin-bottom: 20px;">🏗️</div>
-                <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY KAROL!</h1>
-                <p style="font-size: 24px; opacity: 0.8; margin-top: 10px;">Dziś jest {datetime.now().strftime('%A, %d.%m.%Y')}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            if st.button("🚀 WEJDŹ NA BUDOWĘ", use_container_width=True, type="primary"):
-                st.session_state.splash_done = True
-                st.rerun()
-            st.stop()
-        
         render_crew_dashboard(p_id, "KAROL_ID", "Karol")
         
     elif menu == "🚨 Blokady i Materiały":
