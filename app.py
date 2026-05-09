@@ -1242,6 +1242,90 @@ def calculate_smart_recommendations():
 st.set_page_config(page_title="RemontIQ Cloud", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
+# 4. REGULACJE FINANSOWE (Sprint 23)
+# ==========================================
+PAYMENT_RULES = {
+    "limit_model": "HYBRID_50_100",
+    "done_percent": 1.00,
+    "advance_percent": 0.50,
+    "blocked_percent": 0.00,
+    "global_advance_cap_percent": 0.30,
+    "min_payment_request_amount": 500.00,
+    "advance_eligible_execution_statuses": ["TODO", "IN_PROGRESS"],
+    "final_eligible_execution_statuses": ["DONE"],
+    "required_commercial_status": "ACCEPTED_LOCKED"
+}
+
+def calculate_hybrid_payment_limit(project_id):
+    """Oblicza skumulowany limit wypłat narastająco (Model 50/100)."""
+    try:
+        # Pobieramy budżet projektu
+        p_meta = supabase.table("projects").select("*").eq("id", project_id).single().execute().data
+        if not p_meta: return {"available": 0.0, "gross_limit": 0.0}
+        
+        # Próba pobrania budżetu z różnych nazw kolumn
+        budget = float(p_meta.get('total_budget') or p_meta.get('budget') or 0)
+        
+        # Pobieramy wszystkie zadania
+        all_tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
+        
+        completed_val = 0.0
+        advance_base = 0.0
+        
+        for t in all_tasks:
+            h = parse_handshake_data(t.get('description', ''))
+            price = h['price']
+            c_stat = h['commercial']
+            e_stat = h['execution']
+            
+            if c_stat == "ACCEPTED_LOCKED":
+                if e_stat == "DONE":
+                    completed_val += price
+                elif e_stat in PAYMENT_RULES["advance_eligible_execution_statuses"]:
+                    advance_base += price
+        
+        # Obliczamy składową zaliczkową z uwzględnieniem Global Cap (30%)
+        raw_advance = advance_base * PAYMENT_RULES["advance_percent"]
+        global_cap = budget * PAYMENT_RULES["global_advance_cap_percent"]
+        capped_advance = min(raw_advance, global_cap) if budget > 0 else raw_advance
+        
+        gross_limit = completed_val + capped_advance
+        
+        # Pobieramy sumę wszystkich wniosków (tych które nie są odrzucone)
+        logs = supabase.table("project_logs").select("*").eq("project_id", project_id).eq("type", "payment_request").execute().data or []
+        
+        already_paid_or_pending = 0.0
+        for l in logs:
+            if l.get('status') != 'REJECTED':
+                try:
+                    import json
+                    d = json.loads(l.get('data', '{}'))
+                    already_paid_or_pending += float(d.get('amount', 0))
+                except:
+                    # Fallback jeśli kwota jest w tytule logu (np. "Wniosek: 1500 PLN")
+                    try:
+                        import re
+                        match = re.search(r'(\d+[\.,]?\d*)', l.get('title', ''))
+                        if match:
+                            already_paid_or_pending += float(match.group(1).replace(',', '.'))
+                    except: pass
+
+        available = max(0.0, gross_limit - already_paid_or_pending)
+        
+        return {
+            "available": round(available, 2),
+            "gross_limit": round(gross_limit, 2),
+            "completed_val": round(completed_val, 2),
+            "advance_val": round(capped_advance, 2),
+            "already_paid": round(already_paid_or_pending, 2),
+            "budget": budget,
+            "advance_is_capped": raw_advance > global_cap and budget > 0
+        }
+    except Exception as e:
+        # st.error(f"Błąd kalkulatora 50/100: {e}")
+        return {"available": 0.0, "gross_limit": 0.0}
+
+# ==========================================
 # DARK MODE CSS — Sprint 7
 # ==========================================
 st.markdown("""
@@ -1637,42 +1721,72 @@ if st.session_state['role'] == "crew":
                 st.info("Brak aktywnych negocjacji. Wszystko zatwierdzone lub puste.")
 
         with tab_settlement:
-            st.subheader("Wniosek o wypłatę (Dynamiczny Limit)")
+            st.subheader("Wniosek o wypłatę (Model Hybrydowy 50/100)")
             
-            # 1. Obliczamy wartości
-            tasks = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
-            rates = {"EASY": 80, "MEDIUM": 100, "HARD": 150}
+            # --- KALKULACJA LIMITU (Sprint 23) ---
+            fin = calculate_hybrid_payment_limit(p_id)
             
-            total_val = sum(rates.get(t['difficulty'], 100) * t['estimated_hours'] for t in tasks)
-            done_val = sum(rates.get(t['difficulty'], 100) * t['estimated_hours'] for t in tasks if t['kanban_status'] == 'COMPLETED')
-            
-            # Pobieramy sumę już wypłaconych/oczekujących (bezpieczne zapytanie)
-            try:
-                all_fin_logs = supabase.table("project_logs").select("*").in_("type", ["payment_request", "FINANCIAL"]).execute().data or []
-                # Filtrujemy projekt w Pythonie
-                all_fin_logs = [l for l in all_fin_logs if l.get('project_id') == p_id]
-            except:
-                all_fin_logs = []
-
-            paid_pending_sum = 0
-            for l in all_fin_logs:
-                try:
-                    # Próbujemy wyciągnąć kwotę z tekstu "Wniosek o rozliczenie: 1200.0 PLN"
-                    val_str = l['details'].split(':')[-1].replace('PLN', '').strip()
-                    paid_pending_sum += float(val_str)
-                except: continue
-
-            available_to_withdraw = max(0.0, done_val - paid_pending_sum)
-            
-            # 2. UI Metrics
             c1, c2, c3 = st.columns(3)
-            c1.metric("Wartość ukończona", f"{done_val:,.2f} PLN")
-            c2.metric("Pobrano / Zablokowano", f"{paid_pending_sum:,.2f} PLN")
-            c3.metric("DOSTĘPNE TERAZ", f"{available_to_withdraw:,.2f} PLN", delta=None, delta_color="normal")
+            c1.metric("Za ukończone (100%)", f"{fin['completed_val']:,.2f} PLN")
+            c2.metric("Zaliczki (50%)", f"{fin['advance_val']:,.2f} PLN", 
+                      help="Zaliczka ograniczona do 30% budżetu projektu" if fin['advance_is_capped'] else None)
+            c3.metric("Już pobrano/oczekuje", f"{fin['already_paid']:,.2f} PLN")
             
-            # 3. Progress Bar
-            progress_pct = min(paid_pending_sum / total_val, 1.0) if total_val > 0 else 0
-            st.progress(progress_pct, text=f"Wykorzystanie kontraktu: {progress_pct*100:.1f}%")
+            st.markdown(f"""
+            <div style="background:rgba(56,161,105,0.08); border:1px solid #38a169; padding:20px; border-radius:15px; text-align:center; margin:20px 0;">
+                <div style="font-size:14px; color:#888; text-transform:uppercase; letter-spacing:1px;">Dostępne do wypłaty narastająco</div>
+                <div style="font-size:42px; font-weight:bold; color:#38a169;">{fin['available']:,.2f} <span style="font-size:20px;">PLN</span></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            with st.form("payment_request_form_50100_final"):
+                st.write("### Składanie wniosku")
+                req_amount = st.number_input("Kwota wniosku (PLN)", min_value=0.0, step=100.0, format="%.2f")
+                req_note = st.text_area("Uzasadnienie / Cel wypłaty", placeholder="Podaj na co potrzebujesz środków (np. materiały, rozliczenie etapu)...")
+                
+                # --- WALIDACJA TWARDA ---
+                error_msg = None
+                can_submit = True
+                
+                if req_amount > fin['available']:
+                    error_msg = f"❌ Kwota przekracza Twój aktualny limit ({fin['available']:,.2f} PLN)."
+                    can_submit = False
+                elif req_amount < PAYMENT_RULES["min_payment_request_amount"] and req_amount < fin['available'] and req_amount > 0:
+                    error_msg = f"❌ Minimalna kwota wniosku to {PAYMENT_RULES['min_payment_request_amount']} PLN."
+                    can_submit = False
+                elif req_amount <= 0:
+                    can_submit = False
+                
+                if error_msg:
+                    st.error(error_msg)
+                
+                submitted = st.form_submit_button("📤 Wyślij wniosek do Inwestora", type="primary", disabled=not can_submit)
+                
+                if submitted:
+                    import json
+                    log_data = {
+                        "amount": req_amount,
+                        "note": req_note,
+                        "limit_snapshot": fin,
+                        "timestamp": datetime.now().isoformat(),
+                        "model": "HYBRID_50_100"
+                    }
+                    
+                    supabase.table("project_logs").insert({
+                        "project_id": p_id,
+                        "type": "payment_request",
+                        "title": f"Wniosek o wypłatę: {req_amount:,.2f} PLN",
+                        "description": req_note,
+                        "data": json.dumps(log_data),
+                        "status": "SUBMITTED"
+                    }).execute()
+                    
+                    st.success("✅ Wniosek został wysłany! Inwestor otrzyma powiadomienie.")
+                    time.sleep(1)
+                    st.rerun()
+
+            st.divider()
+            st.caption("ℹ️ System RemontIQ stosuje model 50/100: 100% za prace odebrane (DONE) oraz 50% zaliczki na prace zaakceptowane i aktywne. Całkowita suma zaliczek nie może przekroczyć 30% budżetu projektu.")
             
             st.divider()
             
@@ -2340,65 +2454,74 @@ elif menu == "journal":
 
 elif menu == "settlements":
     st.title("💰 Centrum Rozliczeń Finansowych")
-    st.caption("Zatwierdzaj wypłaty dla ekipy na podstawie jakości i postępów.")
+    st.caption("Zatwierdzaj wypłaty dla ekipy na podstawie modelu 50/100 i postępów prac.")
     
-    # Pobieramy wnioski o płatność z logów (z obsługą błędów struktury bazy)
+    # Pobieramy wnioski o płatność
     try:
-        requests = supabase.table("project_logs").select("*").eq("type", "payment_request").execute().data or []
-        # Jeśli masz kolumnę project_id, możemy filtrować dalej w Pythonie dla bezpieczeństwa
-        if requests and 'project_id' in requests[0]:
-            requests = [r for r in requests if r['project_id'] == project_meta['id']]
+        reqs_all = supabase.table("project_logs").select("*").eq("type", "payment_request").order("created_at", desc=True).execute().data or []
+        # Filtrowanie po projekcie (jeśli kolumna istnieje)
+        p_id = project_meta.get('id')
+        requests = [r for r in reqs_all if r.get('project_id') == p_id or r.get('projekt_id') == p_id]
+        # Tylko te oczekujące (SUBMITTED)
+        pending_requests = [r for r in requests if r.get('status') == 'SUBMITTED']
+        history_requests = [r for r in requests if r.get('status') != 'SUBMITTED']
     except Exception as e:
-        st.error(f"⚠️ Problem z dostępem do bazy rozliczeń: {e}")
-        requests = []
+        st.error(f"⚠️ Błąd dostępu do bazy: {e}")
+        pending_requests, history_requests = [], []
     
-    if not requests:
-        st.info("Brak nowych wniosków o rozliczenie od Karola.")
+    if not pending_requests:
+        st.success("✅ Wszystkie wnioski zostały przetworzone.")
     else:
-        for req in requests:
+        st.write(f"### Oczekujące wnioski ({len(pending_requests)})")
+        for req in pending_requests:
+            import json
+            try:
+                d = json.loads(req.get('data', '{}'))
+                snapshot = d.get('limit_snapshot', {})
+                req_amount = float(d.get('amount', 0))
+                req_note = d.get('note', '')
+            except:
+                snapshot, req_amount, req_note = {}, 0.0, req.get('description', '')
+
             with st.container(border=True):
                 col1, col2 = st.columns([2, 1])
                 with col1:
-                    st.subheader(f"Wniosek: {req['title']}")
-                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]}")
+                    st.subheader(f"Wniosek: {req_amount:,.2f} PLN")
+                    st.write(f"📅 Data: {req['created_at'][:10]} | Autor: **Karol (Szef Ekipy)**")
+                    if req_note: st.info(f"📝 Uzasadnienie: {req_note}")
                     
-                    # Wyciąganie kwoty z tekstu (uproszczone dla demo)
-                    details_text = req.get('details', '')
-                    st.markdown(f"""
-                    <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; margin-top: 10px;">
-                        <span style="font-size: 14px; opacity: 0.7;">KWOTA WNIOSKOWANA:</span><br>
-                        <span style="font-size: 28px; font-weight: bold; color: #60a5fa;">{details_text.split(':')[-1] if ':' in details_text else 'Do ustalenia'}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                # SYMULACJA DANYCH DO SCORINGU
-                # W realnym systemie pobieramy to z bazy danych
-                tasks_accepted = 9 # Placeholder
-                total_t = 10
-                blockers = 1
-                delay = 2
-                
-                q = calculate_quality_score(tasks_accepted, total_t, blockers, delay)
+                    if snapshot:
+                        st.write("---")
+                        st.caption("📊 KONTEKST LIMITU 50/100 (W momencie prośby):")
+                        cc1, cc2, cc3 = st.columns(3)
+                        cc1.metric("Ukończone (100%)", f"{snapshot.get('completed_val', 0):,.2f}")
+                        cc2.metric("Zaliczki (50%)", f"{snapshot.get('advance_val', 0):,.2f}")
+                        cc3.metric("Limit Dostępny", f"{snapshot.get('available', 0):,.2f}")
                 
                 with col2:
-                    color = "#38a169" if q['risk'] == "LOW" else "#dd6b20" if q['risk'] == "MEDIUM" else "#e53e3e"
-                    st.markdown(f"""
-                    <div style="background:{color}; padding:20px; border-radius:15px; text-align:center; color:white;">
-                        <div style="font-size:12px; opacity:0.8;">QUALITY SCORE</div>
-                        <div style="font-size:40px; font-weight:bold;">{q['score']}</div>
-                        <div style="font-size:14px; font-weight:bold;">{q['risk']} RISK</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                st.divider()
-                st.write("### 🔍 Analiza ryzyka")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Jakość (Odbiory)", f"{q['breakdown']['acceptance']}%")
-                c2.metric("Terminowość", f"{q['breakdown']['schedule']}%")
-                c3.metric("Brak blokad", f"{q['breakdown']['blockers']}%")
-                
-                if st.button(f"✅ ZATWIERDŹ WYPŁATĘ (Wniosek {req['id'][-4:]})", type="primary", use_container_width=True):
-                    add_activity_log("Inwestor", "FINANCIAL", project_meta['id'], 
+                    # Szybka akcja
+                    st.write("### Decyzja")
+                    if st.button("✅ ZATWIERDŹ", key=f"app_req_{req['id']}", use_container_width=True, type="primary"):
+                        supabase.table("project_logs").update({"status": "APPROVED"}).eq("id", req['id']).execute()
+                        # Dodajemy log finansowy
+                        add_activity_log("Inwestor", "FINANCIAL", p_id, f"Zatwierdzono wypłatę: {req_amount:,.2f} PLN")
+                        st.success("Zatwierdzono!")
+                        time.sleep(1)
+                        st.rerun()
+                    
+                    if st.button("❌ ODRZUĆ", key=f"rej_req_{req['id']}", use_container_width=True):
+                        supabase.table("project_logs").update({"status": "REJECTED"}).eq("id", req['id']).execute()
+                        add_activity_log("Inwestor", "FINANCIAL", p_id, f"ODRZUCONO wniosek: {req_amount:,.2f} PLN")
+                        st.warning("Odrzucono wniosek.")
+                        time.sleep(1)
+                        st.rerun()
+
+    if history_requests:
+        with st.expander(f"📜 Historia rozliczeń ({len(history_requests)})"):
+            for h in history_requests:
+                status_color = "green" if h['status'] == "APPROVED" else "red"
+                st.write(f":{status_color}[{h['status']}] **{h['title']}** — {h['created_at'][:10]}")
+                if h.get('description'): st.caption(f"Komentarz: {h['description']}")
                                      details=f"Zatwierdzono wypłatę. Score: {q['score']}. Risk: {q['risk']}")
                     # Usuwamy wniosek po akceptacji
                     supabase.table("project_logs").delete().eq("id", req['id']).execute()
