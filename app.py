@@ -1251,15 +1251,18 @@ elif menu == "0. Charter Projektu":
                 elif end_date <= start_date:
                     st.error("❌ Data zakończenia musi być PO dacie startu")
                 else:
-                    create_project_metadata(
+                    res = create_project_metadata(
                         project_name=project_name, project_description=project_desc,
                         planned_start_date=start_date, planned_end_date=end_date,
                         total_budget=total_budget, investor_name=investor_name,
                         crew_lead_name=crew_lead_name or "Nie wiadomo", crew_contact=crew_contact or "Brak",
                         scope_of_work=scope, special_conditions=conditions, status="PLANNING"
                     )
-                    st.success("✅ Charter utworzony!")
-                    st.rerun()
+                    if res:
+                        st.success("✅ Charter utworzony!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Nie udało się utworzyć projektu. Sprawdź komunikaty powyżej.")
     else:
         st.subheader(f"📌 {project_meta['project_name']}")
         col1, col2, col3, col4 = st.columns(4)
