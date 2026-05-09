@@ -35,22 +35,35 @@ def read_table(table_name, select="*", filters=None, order_by=None):
     return pd.DataFrame(res.data)
 
 def get_project_metadata():
-    res = supabase.table("project_metadata").select("*").order("created_at", desc=True).limit(1).execute()
-    return res.data[0] if res.data else None
+    try:
+        res = supabase.table("project_metadata").select("*").order("created_at", desc=True).limit(1).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        st.error(f"❌ Błąd pobierania metadanych: {e}")
+        return None
 
 def create_project_metadata(**kwargs):
-    if 'planned_start_date' in kwargs and isinstance(kwargs['planned_start_date'], date):
-        kwargs['planned_start_date'] = kwargs['planned_start_date'].isoformat()
-    if 'planned_end_date' in kwargs and isinstance(kwargs['planned_end_date'], date):
-        kwargs['planned_end_date'] = kwargs['planned_end_date'].isoformat()
-    supabase.table("project_metadata").insert(kwargs).execute()
+    try:
+        if 'planned_start_date' in kwargs and isinstance(kwargs['planned_start_date'], date):
+            kwargs['planned_start_date'] = kwargs['planned_start_date'].isoformat()
+        if 'planned_end_date' in kwargs and isinstance(kwargs['planned_end_date'], date):
+            kwargs['planned_end_date'] = kwargs['planned_end_date'].isoformat()
+        return supabase.table("project_metadata").insert(kwargs).execute()
+    except Exception as e:
+        st.error(f"❌ Błąd tworzenia projektu w Supabase: {e}")
+        st.info("Prawdopodobna przyczyna: Brak kolumny w tabeli project_metadata lub brak uprawnień (RLS).")
+        return None
 
 def update_project_metadata(project_id, **kwargs):
-    if 'actual_start_date' in kwargs and isinstance(kwargs['actual_start_date'], date):
-        kwargs['actual_start_date'] = kwargs['actual_start_date'].isoformat()
-    if 'actual_end_date' in kwargs and isinstance(kwargs['actual_end_date'], date):
-        kwargs['actual_end_date'] = kwargs['actual_end_date'].isoformat()
-    supabase.table("project_metadata").update(kwargs).eq("id", project_id).execute()
+    try:
+        if 'actual_start_date' in kwargs and isinstance(kwargs['actual_start_date'], date):
+            kwargs['actual_start_date'] = kwargs['actual_start_date'].isoformat()
+        if 'actual_end_date' in kwargs and isinstance(kwargs['actual_end_date'], date):
+            kwargs['actual_end_date'] = kwargs['actual_end_date'].isoformat()
+        return supabase.table("project_metadata").update(kwargs).eq("id", project_id).execute()
+    except Exception as e:
+        st.error(f"❌ Błąd aktualizacji projektu: {e}")
+        return None
 
 # ============================================
 # SPRINT 15: KONSTRUKCJA KANONICZNA
