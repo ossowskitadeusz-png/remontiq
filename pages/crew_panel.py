@@ -65,12 +65,16 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     st.markdown("---")
     
     # 3. TABY
-    tab_new_proposal, tab_quotes, tab_counter, tab_accepted = st.tabs([
+    tab_planning, tab_new_proposal, tab_quotes, tab_counter, tab_accepted = st.tabs([
+        "📋 Plan Remontu",
         "➕ Wyślij Nową Wycenę", 
         "📤 Wysłane Propozycje", 
         "💬 Kontrpropozycje", 
         "✅ Moje Umowy"
     ])
+    
+    with tab_planning:
+        render_crew_planning_module(supabase, phase_service, selected_project_id)
     
     with tab_new_proposal:
         st.subheader("➕ Wyślij Nową Wycenę")
@@ -115,6 +119,14 @@ def render_new_proposal_form(supabase, negotiation_service, project_id):
     
     with st.form("form_create_and_quote_task", clear_on_submit=True):
         t_name = st.text_input("Nazwa roboty (np. Podwieszany sufit) *")
+        
+        # Pobieranie faz do wyboru
+        phases = phase_service.get_phases(project_id)
+        phase_options = {p['phase_name']: p['id'] for p in phases} if phases else {"Brak (Ogólne)": None}
+        
+        selected_phase_name = st.selectbox("📦 Wybierz fazę remontu", options=list(phase_options.keys()))
+        selected_phase_id = phase_options[selected_phase_name]
+        
         t_desc = st.text_area("Opis techniczny (opcjonalnie)")
         
         col1, col2 = st.columns(2)
@@ -132,6 +144,7 @@ def render_new_proposal_form(supabase, negotiation_service, project_id):
                     u_id = st.session_state.get('user_id')
                     task_payload = {
                         "project_id": project_id,
+                        "phase_id": selected_phase_id,
                         "name": t_name,
                         "description": t_desc,
                         "kanban_status": "BACKLOG",
@@ -214,6 +227,49 @@ def render_crew_counter_card(neg, negotiation_service, key_suffix=""):
                 if st.form_submit_button("Anuluj"):
                     st.session_state[f"show_crew_form_{neg_id}"] = False
                     st.rerun()
+
+def render_crew_planning_module(supabase, phase_service, project_id):
+    """
+    Moduł zarządzania Fazami i podglądu struktury projektu.
+    """
+    # Formularz dodawania nowej Fazy
+    with st.expander("➕ Utwórz Nową Fazę Remontu (np. Demolka, Instalacje)"):
+        with st.form("form_add_phase", clear_on_submit=True):
+            p_name = st.text_input("Nazwa nowej fazy *")
+            if st.form_submit_button("Dodaj fazę", type="primary"):
+                if p_name:
+                    phase_service.create_phase(project_id, p_name)
+                    st.success("Faza została dodana!")
+                    st.rerun()
+                else:
+                    st.error("Podaj nazwę fazy.")
+    
+    st.markdown("---")
+    
+    phases = phase_service.get_phases(project_id)
+    if not phases:
+        st.info("Brak zdefiniowanych faz. Dodaj pierwszą fazę, by zacząć budować strukturę prac.")
+        return
+        
+    for p in phases:
+        with st.container(border=True):
+            st.markdown(f"### 📦 {p['phase_name']}")
+            
+            # Pobieramy zadania dla tej fazy
+            tasks = supabase.table("tasks").select("*").eq("phase_id", p['id']).execute().data
+            
+            if tasks:
+                for t in tasks:
+                    # Logika wyświetlania statusu finansowego
+                    status_badge = "❌ Do wyceny"
+                    if t.get("final_approved_price"):
+                        status_badge = f"✅ Zaakceptowana ({t['final_approved_price']:,.0f} zł)"
+                    elif t.get("commercial_status") in ["in_negotiation"]:
+                        status_badge = "⏳ W negocjacjach"
+                        
+                    st.markdown(f"- **{t['name']}** — {status_badge}")
+            else:
+                st.caption("Brak zadań w tej fazie. Przejdź do 'Wyślij Nową Wycenę', by je utworzyć i od od razu podać cenę.")
 
 def render_crew_accepted_card(neg, key_suffix=""):
     task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')
