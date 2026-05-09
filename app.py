@@ -161,55 +161,92 @@ TASK_STATUSES = {
     "DONE": "✅ Zakończone"
 }
 
+def parse_handshake_data(description):
+    """Wyciąga dane negocjacyjne z tekstu opisu w sposób odporny na błędy."""
+    data = {"commercial": "PENDING", "execution": "NOT_READY", "price": 0.0, "comment": ""}
+    if not description or "--- DANE NEGOCJACYJNE ---" not in description:
+        return data
+    try:
+        header_part = description.split("--- DANE NEGOCJACYJNE ---")[1].split("------------------------")[0]
+        for line in header_part.split("\n"):
+            if ":" in line:
+                key, val = line.split(":", 1)
+                key = key.strip().upper()
+                val = val.strip()
+                if key == "COMMERCIAL": data["commercial"] = val
+                if key == "EXECUTION": data["execution"] = val
+                if key in ["CENA", "LOCKED_PRICE", "CENA_KAROLA"]: 
+                    try: data["price"] = float(val)
+                    except: pass
+                if key == "LAST_COMMENT": data["comment"] = val
+    except: pass
+    return data
+
+def validate_project_budget(project_id, new_task_price):
+    """Sprawdza, czy dodanie tej kwoty mieści się w budżecie projektu."""
+    try:
+        p_meta = supabase.table("projects").select("total_budget").eq("id", project_id).single().execute().data
+        if not p_meta: return True, "Brak zdefiniowanego budżetu"
+        
+        budget = float(p_meta.get('total_budget', 0))
+        # Sumujemy tylko ZABLOKOWANE zadania
+        all_t = supabase.table("tasks").select("description").eq("project_id", project_id).execute().data or []
+        locked_sum = 0
+        for t in all_t:
+            h = parse_handshake_data(t.get('description', ''))
+            if h['commercial'] == "ACCEPTED_LOCKED":
+                locked_sum += h['price']
+        
+        remaining = budget - locked_sum
+        if new_task_price > remaining:
+            return False, f"⚠️ PRZEKROCZENIE BUDŻETU! Dostępne: {remaining:,.2f} PLN, Próba: {new_task_price:,.2f} PLN"
+        
+        if (locked_sum + new_task_price) > (budget * 0.9):
+            return True, f"🟡 Ostrzeżenie: Wykorzystasz {(locked_sum + new_task_price)/budget*100:.1f}% budżetu!"
+            
+        return True, "✅ OK"
+    except:
+        return True, "Nie udało się zweryfikować budżetu"
+
 def process_task_handshake(task_id, action, actor_role, price=None, comment=""):
-    """Obsługuje zaawansowany Handshake (Commercial vs Execution)."""
+    """Obsługuje zaawansowany Handshake z walidacją reguł biznesowych."""
     try:
         t = supabase.table("tasks").select("*").eq("id", task_id).single().execute().data
         desc = t.get('description', '') or ''
+        current = parse_handshake_data(desc)
         
-        # Domyślne wartości
-        c_status = "PENDING"
-        e_status = "NOT_READY"
-        l_price = price
+        # ZABEZPIECZENIE: Nie pozwól zmieniać zablokowanych finansowo zadań bez aneksowania
+        if current['commercial'] == "ACCEPTED_LOCKED" and action != "REJECT":
+            st.error("To zadanie jest już zablokowane finansowo. Zmiany wymagają aneksowania.")
+            return False
+
+        # Maszyna stanów
+        c_status, e_status, l_price = current['commercial'], current['execution'], price or current['price']
         
         if action == "SUBMIT_VALUATION":
-            c_status = "PROPOSED_BY_CREW"
-            e_status = "NOT_READY"
-        elif action == "ACCEPT":
-            c_status = "ACCEPTED_LOCKED"
-            e_status = "TODO" # Odblokowuje robotę na Kanbanie
-            l_price = price
+            c_status, e_status = "PROPOSED_BY_CREW", "NOT_READY"
+        elif action in ["ACCEPT", "LOCK_OFFLINE"]:
+            # Walidacja budżetu przed akceptacją
+            ok, msg = validate_project_budget(t['project_id'], l_price)
+            if not ok:
+                st.error(msg)
+                return False
+            c_status, e_status = "ACCEPTED_LOCKED", "TODO"
         elif action == "COUNTER_OFFER":
-            c_status = "INVESTOR_COUNTERED"
-            e_status = "NOT_READY"
-        elif action == "LOCK_OFFLINE":
-            c_status = "ACCEPTED_LOCKED"
-            e_status = "TODO"
-            l_price = price
+            c_status, e_status = "INVESTOR_COUNTERED", "NOT_READY"
 
-        # Budujemy nowy tag metadanych
         meta_tag = f"--- DANE NEGOCJACYJNE ---\nCOMMERCIAL: {c_status}\nEXECUTION: {e_status}\nLOCKED_PRICE: {l_price}\nLAST_COMMENT: {comment}\n------------------------\n\n"
-        
         if "--- DANE NEGOCJACYJNE ---" in desc:
             desc = desc.split("------------------------")[-1].strip()
         
-        new_desc = meta_tag + desc
-        update_data = {"description": new_desc, "updated_at": datetime.now().isoformat()}
-        
-        # Synchronizujemy kanban_status jeśli zaakceptowano
-        if c_status == "ACCEPTED_LOCKED":
-            update_data["kanban_status"] = "TODO"
-            # Opcjonalnie: zapisujemy do kolumny price jeśli istnieje
-            try: update_data["locked_price"] = price
-            except: pass
+        update_data = {"description": meta_tag + desc, "updated_at": datetime.now().isoformat()}
+        if c_status == "ACCEPTED_LOCKED": update_data["kanban_status"] = "TODO"
 
         supabase.table("tasks").update(update_data).eq("id", task_id).execute()
-        
-        # Log eventu do audytu
-        add_activity_log(actor_role, f"HANDSHAKE_{action}", "FINANCIAL", f"Zadanie {task_id}: {l_price} PLN | Status: {c_status}")
+        add_activity_log(actor_role, f"HANDSHAKE_{action}", "FINANCIAL", f"Zadanie {task_id}: {l_price} PLN")
         return True
     except Exception as e:
-        st.error(f"Błąd Handshake 2.0: {e}")
+        st.error(f"Błąd Handshake 2.1: {e}")
         return False
 
 def get_project_metadata():
@@ -1547,45 +1584,42 @@ if st.session_state['role'] == "crew":
             try:
                 all_t = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
                 tasks = [t for t in all_t if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '')]
-                # Wykluczamy te zablokowane
+                # Wykluczamy te już zablokowane (LOCKED)
                 tasks = [t for t in tasks if "COMMERCIAL: ACCEPTED_LOCKED" not in (t.get('description') or '')]
             except:
                 tasks = []
             
             if tasks:
                 for t in tasks:
-                    desc_f = t.get('description', '') or ''
-                    # Parsowanie Tagów 2.0
-                    c_status = "PENDING"
-                    crew_p = 0
-                    inv_p = 0
-                    last_msg = ""
-                    
-                    try:
-                        lines = desc_f.split("\n")
-                        for line in lines:
-                            if "COMMERCIAL:" in line: c_status = line.split(":")[1].strip()
-                            if "LOCKED_PRICE:" in line: inv_p = line.split(":")[1].strip()
-                            if "CENA:" in line: crew_p = line.split(":")[1].strip()
-                            if "LAST_COMMENT:" in line: last_msg = line.split(":")[1].strip()
-                    except: pass
+                    h = parse_handshake_data(t['description'])
+                    c_status, crew_p, last_msg = h['commercial'], h['price'], h['comment']
                     
                     with st.container(border=True):
                         c1, c2 = st.columns([3, 1])
                         with c1:
                             st.write(f"**{t.get('name', 'Bez nazwy')}**")
-                            st.caption(f"Status Finansowy: {c_status}")
+                            st.caption(f"Status Finansowy: **{c_status}**")
                             
                             if c_status == "INVESTOR_COUNTERED":
-                                st.warning(f"💬 Inwestor proponuje korektę: **{inv_p} PLN**")
-                                if last_msg: st.caption(f"Komentarz Inwestora: {last_msg}")
-                                if st.button("🤝 Akceptuję propozycję Inwestora", key=f"crew_acc_{t['id']}"):
-                                    process_task_handshake(t['id'], "LOCK_OFFLINE", "crew", price=float(inv_p), comment="Karol zaakceptował kontrofertę")
+                                st.warning(f"💼 **INWESTOR PROPONUJE KOREKTĘ: {crew_p:,.2f} PLN**")
+                                if last_msg: st.info(f"Uzasadnienie: {last_msg}")
+                                
+                                b1, b2 = st.columns(2)
+                                if b1.button("🤝 Akceptuję propozycję", key=f"crew_acc_{t['id']}", type="primary"):
+                                    process_task_handshake(t['id'], "LOCK_OFFLINE", "crew", price=crew_p, comment="Karol zaakceptował kontrofertę")
+                                    st.success("Zaakceptowano! Zadanie trafia na tablicę.")
                                     st.rerun()
+                                if b2.button("📐 Nowa wycena", key=f"crew_new_{t['id']}"):
+                                    # Tu po prostu odświeżymy widok, żeby mógł wpisać nową cenę w formularzu wyżej
+                                    st.info("Użyj formularza powyżej, aby wysłać nową wycenę.")
+                            
+                            elif c_status == "PROPOSED_BY_CREW":
+                                st.info("⏳ Czekamy na ruch Inwestora...")
+                                
                         with c2:
-                            st.write(f"Twoja cena: {crew_p} PLN")
+                            st.metric("Ostatnia kwota", f"{crew_p:,.2f}")
             else:
-                st.info("Brak aktywnych negocjacji.")
+                st.info("Brak aktywnych negocjacji. Wszystko zatwierdzone lub puste.")
 
         with tab_settlement:
             st.subheader("Wniosek o wypłatę (Dynamiczny Limit)")
@@ -2358,7 +2392,7 @@ elif menu == "settlements":
 
 elif menu == "negotiations":
     st.title("🤝 Centrum Negocjacji i Handshake")
-    st.write("Tu negocjujesz wyceny i blokujesz budżet robót.")
+    st.write("Tu negocjujesz wyceny i blokujesz budżet robót pod pełną kontrolą.")
     
     # Pobieramy metadane projektu dla walidacji budżetu
     p_meta = get_project_metadata()
@@ -2366,8 +2400,8 @@ elif menu == "negotiations":
 
     try:
         all_tasks = supabase.table("tasks").select("*").execute().data or []
-        # Szukamy zadań z tagiem, które NIE są jeszcze zablokowane (LOCKED)
         tasks = [t for t in all_tasks if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '')]
+        # Wykluczamy zablokowane
         tasks = [t for t in tasks if "COMMERCIAL: ACCEPTED_LOCKED" not in (t.get('description') or '')]
     except:
         tasks = []
@@ -2375,66 +2409,58 @@ elif menu == "negotiations":
     if not tasks:
         st.info("✅ Wszystkie wyceny zostały zatwierdzone. Brak oczekujących ofert.")
     else:
+        # Obliczamy obecne zużycie budżetu
+        locked_sum = sum([parse_handshake_data(t['description'])['price'] for t in all_tasks if "COMMERCIAL: ACCEPTED_LOCKED" in (t.get('description') or '')])
+        remaining_b = total_budget - locked_sum
+        
+        st.metric("Pozostały Budżet Projektu", f"{remaining_b:,.2f} PLN", f"Limit: {total_budget:,.2f}")
+        st.progress(min(1.0, locked_sum / total_budget) if total_budget > 0 else 0)
+
         for t in tasks:
             with st.container(border=True):
-                desc_full = t.get('description', '') or ''
-                # Parsowanie Tagów 2.0
-                c_status = "PENDING"
-                e_status = "NOT_READY"
-                crew_p = 0
-                last_msg = ""
-                
-                try:
-                    lines = desc_full.split("\n")
-                    for line in lines:
-                        if "COMMERCIAL:" in line: c_status = line.split(":")[1].strip()
-                        if "EXECUTION:" in line: e_status = line.split(":")[1].strip()
-                        if "CENA:" in line or "LOCKED_PRICE:" in line: 
-                            crew_p = float(line.split(":")[1].strip())
-                        if "LAST_COMMENT:" in line: last_msg = line.split(":")[1].strip()
-                except: pass
+                h = parse_handshake_data(t['description'])
+                c_status, e_status, crew_p, last_msg = h['commercial'], h['execution'], h['price'], h['comment']
 
                 c1, c2, c3 = st.columns([2, 1, 1])
                 with c1:
                     st.subheader(f"📍 {t.get('name', 'Bez nazwy')}")
                     st.write(f"Status Finansowy: **{c_status}**")
-                    clean_desc = desc_full.split("------------------------")[-1].strip() if "------------------------" in desc_full else desc_full
+                    clean_desc = t['description'].split("------------------------")[-1].strip() if "------------------------" in t['description'] else t['description']
                     st.write(f"Zakres: {clean_desc}")
                     if last_msg: st.caption(f"💬 Ostatni komentarz: {last_msg}")
                 
                 with c2:
-                    st.metric("Oferta Karola", f"{crew_p:,.2f} PLN")
+                    st.metric("Oferta (PLN)", f"{crew_p:,.2f}")
+                    # Sprawdzamy czy to zadanie mieści się w reszcie budżetu
+                    can_acc, budget_msg = validate_project_budget(t['project_id'], crew_p)
+                    if not can_acc: st.error(budget_msg)
+                    elif "🟡" in budget_msg: st.warning(budget_msg)
                 
                 with c3:
-                    # Prosta walidacja budżetu (mockup)
-                    st.metric("Budżet Projektu", f"{total_budget:,.2f} PLN")
+                    st.write("📈 **Wpływ na budżet**")
+                    new_rem = remaining_b - crew_p
+                    st.write(f"Zostanie: **{new_rem:,.2f} PLN**")
 
                 st.divider()
-                
                 col_a, col_b, col_c = st.columns(3)
                 
-                # Akcja 1: Akceptacja
-                if col_a.button(f"✅ ZAAKCEPTUJ ({crew_p} PLN)", key=f"acc_{t['id']}", type="primary"):
+                if col_a.button(f"✅ ZAAKCEPTUJ", key=f"acc_{t['id']}", type="primary", disabled=not can_acc):
                     if process_task_handshake(t['id'], "ACCEPT", "investor", price=crew_p, comment="Zaakceptowano ofertę Karola"):
-                        st.success("Zatwierdzono! Zadanie trafia na Kanban.")
+                        st.success("Zatwierdzono i zablokowano!")
                         st.rerun()
                 
-                # Akcja 2: Kontroferta
-                new_p = col_b.number_input("Moja propozycja", value=float(crew_p), step=100.0, key=f"newp_{t['id']}")
-                msg = st.text_input("Powód korekty", key=f"msg_{t['id']}")
-                
+                new_p = col_b.number_input("Kontroferta", value=float(crew_p), step=100.0, key=f"newp_{t['id']}")
+                msg = st.text_input("Uzasadnienie", key=f"msg_{t['id']}")
                 if col_b.button("↩️ WYŚLIJ KONTROFERTĘ", key=f"cnt_{t['id']}"):
                     if process_task_handshake(t['id'], "COUNTER_OFFER", "investor", price=new_p, comment=msg):
-                        st.success("Wysłano Twoją propozycję do Karola.")
+                        st.success("Wysłano do Karola.")
                         st.rerun()
                 
-                # Akcja 3: Lock Offline
                 with col_c:
-                    st.write("🤝 **Uzgodnione poza systemem?**")
-                    confirm_off = st.checkbox("Potwierdzam ustalenia", key=f"chk_{t['id']}")
-                    if st.button("🔒 ZABLOKUJ CENĘ", key=f"lockoff_{t['id']}", disabled=not confirm_off):
+                    confirm_off = st.checkbox("Uzgodnione poza tel.", key=f"chk_{t['id']}")
+                    if st.button("🔒 ZABLOKUJ CENĘ", key=f"lockoff_{t['id']}", disabled=not confirm_off or not can_acc):
                         if process_task_handshake(t['id'], "LOCK_OFFLINE", "investor", price=new_p, comment="Uzgodniono poza systemem"):
-                            st.success("Cena zablokowana i wprowadzona do budżetu.")
+                            st.success("Zablokowano.")
                             st.rerun()
 
 elif menu == "settings":
