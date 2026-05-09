@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-002"
+APP_VERSION = "sprint23-50-100-deploy-fix-003"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -1848,24 +1848,6 @@ if st.session_state['role'] == "crew":
             st.divider()
             st.caption("ℹ️ Model Hybrydowy 50/100: 100% DONE | 50% TODO/IN_PROGRESS | 0% BLOCKED | Global Cap 30%.")
             
-            st.divider()
-            
-            # 4. Formularz wniosku
-            req_amount = st.number_input("Kwota wniosku (PLN)", min_value=0.0, max_value=100000.0, step=100.0, format="%.2f")
-            
-            can_submit = req_amount > 0 and req_amount <= available_to_withdraw
-            
-            if req_amount > available_to_withdraw:
-                st.error(f"❌ Przekroczono limit! Maksymalnie możesz wypłacić {available_to_withdraw:,.2f} PLN (za ukończone prace).")
-            elif req_amount > 0:
-                st.success(f"✅ Kwota poprawna. Możesz wysłać wniosek.")
-            
-            note = st.text_input("Komentarz do wniosku", placeholder="np. Rozliczenie tygodniowe, zaliczka na narzędzia...")
-            
-            if st.button("🚀 WYŚLIJ WNIOSEK DO INWESTORA", use_container_width=True, type="primary", disabled=not can_submit):
-                add_activity_log("Karol", "payment_request", p_id, details=f"Wniosek o rozliczenie: {req_amount} PLN | Komentarz: {note}")
-                st.success(f"✅ Wniosek o {req_amount} PLN został wysłany!")
-                st.rerun()
 
         if st.button("⬅️ Powrót do Zadania", use_container_width=True):
             st.session_state['crew_menu_active'] = None
