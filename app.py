@@ -1381,11 +1381,51 @@ if st.session_state['role'] == "crew":
         st.stop()
         
     if st.session_state.get('crew_menu_active') == "finanse":
-        st.title("💰 Moje Finanse")
-        earnings = calculate_weekly_bonus_v2(p_id, "KAROL_ID")
-        st.metric("Suma do wypłaty (Ten tydzień)", f"{earnings['base'] + earnings['bonus_amt']} PLN")
-        st.info("Tutaj znajdziesz historię Twoich rozliczeń i premii.")
-        if st.button("⬅️ Powrót"):
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 30px; border-radius: 20px; color: white; margin-bottom: 25px;">
+            <h1 style="margin:0; font-size: 32px;">💰 Moje Finanse</h1>
+            <p style="opacity: 0.7; margin: 5px 0 0 0;">Centrum rozliczeń i wycen kontraktu</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        tab_valuation, tab_settlement = st.tabs(["📐 WYCENA ETAPÓW", "💸 ROZLICZENIE OKRESOWE"])
+        
+        with tab_valuation:
+            st.subheader("Analiza wyceny zadań")
+            tasks = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
+            if tasks:
+                df_f = pd.DataFrame(tasks)
+                # Mapowanie stawek
+                rates = {"EASY": 80, "MEDIUM": 100, "HARD": 150}
+                df_f['stawka'] = df_f['difficulty'].map(rates)
+                df_f['wartosc'] = df_f['stawka'] * df_f['estimated_hours']
+                
+                st.dataframe(df_f[['phase_name', 'name', 'difficulty', 'estimated_hours', 'wartosc']], 
+                             column_config={
+                                 "wartosc": st.column_config.NumberColumn("Wycena (PLN)", format="%.2f zł")
+                             }, hide_index=True, use_container_width=True)
+                
+                total_val = df_f['wartosc'].sum()
+                st.metric("Całkowita wartość Twoich prac", f"{total_val} PLN")
+            else:
+                st.info("Brak zadań do wyceny.")
+
+        with tab_settlement:
+            st.subheader("Wniosek o rozliczenie tygodniowe")
+            earnings = calculate_weekly_bonus_v2(p_id, "KAROL_ID")
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Podstawa (Gwarantowana)", f"{earnings['base']} PLN")
+            c2.metric("Bonus za jakość (Aktualny)", f"{earnings['bonus_amt']} PLN")
+            
+            st.markdown("---")
+            st.warning("⚠️ Po kliknięciu poniższego przycisku, Inwestor otrzyma powiadomienie o gotowości do rozliczenia bieżącego tygodnia.")
+            
+            if st.button("🚀 GENERUJ I WYŚLIJ ROZLICZENIE DO INWESTORA", use_container_width=True, type="primary"):
+                add_activity_log("Karol", "payment_request", p_id, details=f"Wniosek o rozliczenie: {earnings['base'] + earnings['bonus_amt']} PLN")
+                st.success("✅ Wniosek został wysłany! Inwestor otrzymał powiadomienie.")
+
+        if st.button("⬅️ Powrót do Zadania", use_container_width=True):
             st.session_state['crew_menu_active'] = None
             st.rerun()
         st.stop()
