@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-001"
+APP_VERSION = "sprint23-50-100-deploy-fix-002"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -1343,7 +1343,17 @@ def calculate_hybrid_payment_limit(project_id):
             "budget": budget,
             "is_advance_capped": adv_base > global_cap and budget > 0
         }
-    except: return {"available": 0.0, "gross_limit": 0.0}
+    except Exception as e:
+        return {
+            "available": 0.0, 
+            "gross_limit": 0.0, 
+            "completed_val": 0.0, 
+            "advance_val": 0.0, 
+            "already_paid": 0.0,
+            "budget": 0.0,
+            "is_advance_capped": False,
+            "error": str(e)
+        }
 
 def classify_payment_request(limit_res):
     if limit_res['completed_val'] > 0 and limit_res['advance_val'] > 0: return "MIXED"
