@@ -1508,19 +1508,35 @@ if st.session_state['role'] == "crew":
                     
                     if st.form_submit_button("Weryfikuj i wyślij do Inwestora"):
                         if t_title and t_price > 0:
-                            # Używamy tylko kolumn, które na 100% istnieją w Twojej tabeli tasks
-                            # Dane negocjacyjne "ukrywamy" w opisie, dopóki nie rozbudujemy bazy
-                            full_desc = f"--- DANE NEGOCJACYJNE ---\nCENA_KAROLA: {t_price}\nSTATUS: PROPOSED_BY_CREW\n------------------------\n\n{t_desc}"
+                            # Tagi Handshake 2.0
+                            full_desc = f"--- DANE NEGOCJACYJNE ---\nCOMMERCIAL: PROPOSED_BY_CREW\nEXECUTION: NOT_READY\nCENA: {t_price}\n------------------------\n\n{t_desc}"
                             
-                            supabase.table("tasks").insert({
-                                "project_id": p_id,
+                            # Budujemy paczkę danych - tylko najbezpieczniejsze pola
+                            payload = {
                                 "name": t_title,
                                 "description": full_desc,
-                                "estimated_hours": t_hours,
                                 "kanban_status": "BACKLOG"
-                            }).execute()
-                            st.success("✅ Wysłano propozycję do Inwestora!")
-                            st.rerun()
+                            }
+                            
+                            # Próbujemy dodać powiązanie z projektem (sprawdzamy obie wersje nazwy)
+                            if p_id:
+                                payload["project_id"] = p_id
+                            
+                            try:
+                                supabase.table("tasks").insert(payload).execute()
+                                st.success("✅ Wysłano propozycję do Inwestora!")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                # Jeśli projekt_id zawiodło, spróbuj projekt_id -> projekt_id (polska nazwa)
+                                try:
+                                    payload.pop("project_id", None)
+                                    payload["projekt_id"] = p_id
+                                    supabase.table("tasks").insert(payload).execute()
+                                    st.success("✅ Wysłano (auto-fix kolumny projekt_id)!")
+                                    st.rerun()
+                                except:
+                                    st.error(f"Nie udało się zapisać zadania. Sprawdź strukturę tabeli tasks. Błąd: {e}")
                         else:
                             st.error("Podaj nazwę i cenę!")
 
