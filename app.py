@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-005"
+APP_VERSION = "sprint23-50-100-deploy-fix-006"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -187,7 +187,7 @@ def parse_handshake_data(description):
 def validate_project_budget(project_id, new_task_price):
     """Sprawdza, czy dodanie tej kwoty mieści się w budżecie projektu."""
     try:
-        p_meta = supabase.table("projects").select("total_budget").eq("id", project_id).single().execute().data
+        p_meta = supabase.table("project_metadata").select("total_budget").eq("id", project_id).single().execute().data
         if not p_meta: return True, "Brak zdefiniowanego budżetu"
         
         budget = float(p_meta.get('total_budget', 0))
@@ -1306,8 +1306,7 @@ def calculate_task_payment_eligibility(task, rules=PAYMENT_RULES):
 # --- GŁÓWNY KALKULATOR LIMITU ---
 def calculate_hybrid_payment_limit(project_id):
     try:
-        p_meta = supabase.table("projects").select("*").eq("id", project_id).single().execute().data
-        budget = safe_float(p_meta.get('total_budget') or p_meta.get('budget'))
+        budget = supabase.table("project_metadata").select("total_budget").eq("id", project_id).single().execute().data.get('total_budget', 0)
         
         all_tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
         
