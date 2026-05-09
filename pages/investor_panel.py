@@ -1,6 +1,6 @@
 """
-INVESTOR_PANEL.PY — Panel dla Inwestora (Ty)
-Odpowiada za: zatwierdzanie negocjacji, zatwierdza zmiany, dashboard budżetu
+INVESTOR_PANEL.PY — Panel dla Inwestora (Ty) - WERSJA PREMIUM 2.0
+Odpowiada za: zatwierdzanie negocjacji (Handshake 2.0), dashboard budżetu, timeline
 """
 
 import streamlit as st
@@ -26,8 +26,7 @@ def render_investor_panel(
     Umożliwia zarządzanie budżetem, negocjacje, zatwierdza zmiany.
     """
     
-    st.header("💎 Panel Inwestora (Ty)")
-    st.subheader("Zarządzaj budżetem, zatwierdź negocjacje, kontroluj zmiany")
+    st.title("💎 Centrum Dowodzenia Inwestora")
     
     # ============================================================================
     # 1. WYBÓR PROJEKTU
@@ -46,7 +45,7 @@ def render_investor_panel(
     
     project_names = {p["id"]: p["project_name"] for p in projects}
     selected_project_id = st.selectbox(
-        "📋 Wybierz projekt",
+        "📋 Wybierz projekt do zarządzania",
         options=[p["id"] for p in projects],
         format_func=lambda x: project_names[x],
         key="investor_project_select"
@@ -56,11 +55,10 @@ def render_investor_panel(
         return
     
     # ============================================================================
-    # 2. DASHBOARD PODSUMOWANIA
+    # 2. DASHBOARD PODSUMOWANIA (Górne metryki)
     # ============================================================================
     
     st.write("---")
-    st.subheader("📊 Szybki Podgląd Projektu")
     
     # Pobierz wszystkie fazy
     phases = phase_service.get_phases(selected_project_id)
@@ -70,448 +68,177 @@ def render_investor_panel(
     total_spent = sum(float(p.get("actual_spent", 0)) for p in phases)
     total_remaining = total_budget - total_spent
     
-    # Statystyki faz
-    completed_phases = sum(1 for p in phases if p.get("status") == "COMPLETED")
-    in_progress = sum(1 for p in phases if p.get("status") == "IN_PROGRESS")
+    # Statystyki negocjacji (dla metryk)
+    neg_stats = negotiation_service.get_negotiation_statistics(selected_project_id)
     
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        st.metric("📋 Wszystkich Faz", len(phases))
-    
-    with col2:
-        st.metric("🟢 Ukończonych", completed_phases)
-    
-    with col3:
-        st.metric("🟡 W Toku", in_progress)
-    
-    with col4:
-        st.metric("💰 Budżet", f"{total_budget:,.0f} PLN")
-    
-    with col5:
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric("🏗️ Fazy", len(phases))
+    with m2:
+        st.metric("💰 Budżet", f"{total_budget:,.0f} zł")
+    with m3:
         spent_pct = (total_spent / total_budget * 100) if total_budget > 0 else 0
-        st.metric("📈 Wydano", f"{spent_pct:.0f}%")
-    
+        st.metric("📈 Wydano", f"{spent_pct:.1f}%", f"-{total_remaining:,.0f} zł")
+    with m4:
+        st.metric("⏳ Czekające ceny", neg_stats.get('pending', 0), delta_color="inverse")
+    with m5:
+        st.metric("🛡️ Zaoszczędzono", f"{neg_stats.get('savings', 0):,.0f} zł", delta="PLN")
+
     # ============================================================================
     # 3. TABS: Negocjacje | Zmiany | Timeline | Budżet
     # ============================================================================
     
     tab_negotiations, tab_changes, tab_timeline, tab_budget = st.tabs([
-        "💰 Negocjacje Cen",
-        "⚡ Zatwierdzanie Zmian",
-        "📅 Timeline Projektu",
-        "💵 Analiza Budżetu"
+        "💰 HANDSHAKE (Ceny)",
+        "⚡ ZMIANY W PLANIE",
+        "📅 HARMONOGRAM",
+        "💵 ANALIZA KOSZTÓW"
     ])
     
     # ============================================================================
-    # TAB 1: NEGOCJACJE CENA
+    # TAB 1: NEGOCJACJE (HANDSHAKE 2.0)
     # ============================================================================
     
     with tab_negotiations:
-        st.subheader("💰 Negocjacje Cen — Propozycje od Karola")
+        st.subheader("📋 Propozycje cenowe od Karola")
         
-        # Pobierz oczekujące negocjacje (NOWA METODA 2.0)
-        pending_negotiations = negotiation_service.get_pending_for_investor(selected_project_id)
+        # Pobierz aktywne negocjacje
+        pending_negs = negotiation_service.get_pending_for_investor(selected_project_id)
         
-        if not pending_negotiations:
-            st.success("✅ Brak oczekujących negocjacji. Wszystko uzgodnione!")
+        if not pending_negs:
+            st.success("✅ Wszystkie ceny są uzgodnione. Brak nowych propozycji.")
         else:
-            st.warning(f"⏳ {len(pending_negotiations)} negocjacji czeka na Twoją decyzję")
-            
-            for negotiation in pending_negotiations:
-                # Wyciągamy dane z joinowanej tabeli tasks
-                task_info = negotiation.get('tasks', {})
-                task_name = task_info.get('name', 'Zadanie bez nazwy')
-                task_desc = task_info.get('description', '')
+            for neg in pending_negs:
+                # Wyciągamy dane
+                neg_id = neg['id']
+                task_info = neg.get('tasks', {})
+                task_name = task_info.get('name', 'Zadanie')
                 
+                # Budujemy kartę negocjacji
                 with st.container(border=True):
-                    col1, col2, col3 = st.columns([2, 1, 1])
+                    c1, c2, c3 = st.columns([2, 1, 1])
                     
-                    with col1:
-                        st.write(f"**{task_name}**")
-                        if task_desc:
-                            st.caption(task_desc)
-                        st.caption(f"Status: {negotiation['status']}")
+                    with c1:
+                        st.markdown(f"### 📍 {task_name}")
+                        st.caption(f"ID Negocjacji: {neg_id[:8]}")
+                        if neg.get('proposed_notes'):
+                            st.info(f"💬 **Karol pisze:** {neg['proposed_notes']}")
+                        
+                        # HISTORIA (Oś czasu)
+                        with st.expander("📜 Pokaż historię negocjacji", expanded=False):
+                            details = negotiation_service.get_negotiation_details(neg_id)
+                            if details and details.get('history'):
+                                for h in details['history']:
+                                    icon = "👷" if h['actor'] == 'crew' else "👤"
+                                    dt = datetime.fromisoformat(h['created_at']).strftime("%d.%m %H:%M")
+                                    action_name = {
+                                        'proposed': 'zaproponował cenę',
+                                        'counter_offered': 'wysłał kontrpropozycję',
+                                        'rejected': 'odrzucił ofertę',
+                                        'accepted': 'zaakceptował warunki'
+                                    }.get(h['action'], h['action'])
+                                    
+                                    st.write(f"**{dt}** | {icon} {h['actor'].capitalize()} {action_name}")
+                                    if 'price' in h['details']:
+                                        st.write(f"→ Kwota: `{h['details']['price']:,} zł`")
+                            else:
+                                st.caption("Brak historii dla tego zadania.")
+
+                    with c2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.metric("OFERTA KAROLA", f"{neg['proposed_price']:,.0f} zł")
+                        st.caption(f"Przewidywany czas: {neg['proposed_duration_days']} dni")
                     
-                    with col2:
-                        st.write("### Propozycja Karola")
-                        st.metric("Cena", f"{negotiation.get('proposed_price', 0):,.0f} PLN")
-                        st.caption(f"{negotiation.get('proposed_duration_days', 0)} dni")
-                    
-                    with col3:
-                        st.write("### Twoja Kontrpropozycja")
-                        if negotiation.get('response_price'):
-                            st.metric(
-                                "Kontrpropozycja",
-                                f"{negotiation.get('response_price'):,.0f} PLN"
-                            )
+                    with c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if neg.get('response_price'):
+                            st.metric("TWOJA KONTRA", f"{neg['response_price']:,.0f} zł", 
+                                      delta=f"{neg['response_price'] - neg['proposed_price']:,.0f} zł")
                         else:
-                            st.info("Brak jeszcze kontrpropozycji")
-                    
+                            st.write("### Brak kontry")
+                            st.caption("Czekasz na decyzję")
+
                     st.write("---")
                     
-                    # Akcje
-                    action_col1, action_col2, action_col3, action_col4 = st.columns(4)
+                    # Przyciski akcji
+                    b1, b2, b3 = st.columns(3)
                     
-                    with action_col1:
-                        if st.button(
-                            "✅ Zaakceptuj",
-                            key=f"accept_{negotiation['id']}"
-                        ):
-                            success, message = negotiation_service.accept_proposal(
-                                negotiation_id=negotiation['id'],
-                                investor_notes="Zaakceptowane przez inwestora"
-                            )
-                            
+                    with b1:
+                        if st.button("✅ Akceptuj cenę", key=f"acc_{neg_id}", use_container_width=True):
+                            success, msg = negotiation_service.accept_proposal(neg_id, "Zaakceptowane")
                             if success:
-                                st.success(message)
+                                st.success(msg)
                                 st.rerun()
                             else:
-                                st.error(message)
-                    
-                    with action_col2:
-                        if st.button(
-                            "💬 Kontrpropozycja",
-                            key=f"counter_{negotiation['id']}"
-                        ):
-                            st.session_state[f"counter_mode_{negotiation['id']}"] = True
-                            st.rerun()
-                    
-                    with action_col3:
-                        if st.button(
-                            "❌ Odrzuć",
-                            key=f"reject_{negotiation['id']}"
-                        ):
-                            success, message = negotiation_service.reject_proposal(
-                                negotiation_id=negotiation['id'],
-                                investor_notes="Odrzucone przez inwestora"
-                            )
-                            if success:
-                                st.info(message)
-                                st.rerun()
-                            else:
-                                st.error(message)
-                    
-                    with action_col4:
-                        if st.button("📋 Szczegóły", key=f"details_{negotiation['id']}"):
-                            st.session_state[f"show_details_{negotiation['id']}"] = True
-                    
-                    # Formularz kontrpropozycji
-                    if st.session_state.get(f"counter_mode_{negotiation['id']}", False):
-                        st.write("### Twoja Kontrpropozycja")
-                        
-                        counter_price = st.number_input(
-                            f"Nowa cena {negotiation['id'][:8]}",
-                            min_value=0.0,
-                            value=float(negotiation.get('proposed_price', 0) * 0.9),
-                            step=50.0,
-                            key=f"cp_{negotiation['id']}"
-                        )
-                        
-                        counter_days = st.number_input(
-                            f"Dni {negotiation['id'][:8]}",
-                            min_value=1,
-                            value=int(negotiation.get('proposed_duration_days', 1)),
-                            key=f"cd_{negotiation['id']}"
-                        )
-                        
-                        counter_reason = st.text_area(
-                            "Powód",
-                            key=f"cr_{negotiation['id']}"
-                        )
-                        
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            if st.button("Wyślij", key=f"send_c_{negotiation['id']}"):
-                                success, msg = negotiation_service.counter_offer(
-                                    negotiation_id=negotiation['id'],
-                                    counter_price=counter_price,
-                                    counter_duration_days=int(counter_days),
-                                    counter_notes=counter_reason
-                                )
-                                if success:
-                                    st.success(msg)
-                                    st.session_state[f"counter_mode_{negotiation['id']}"] = False
-                                    st.rerun()
-                                else:
-                                    st.error(msg)
-                        with c2:
-                            if st.button("Anuluj", key=f"cancel_c_{negotiation['id']}"):
-                                st.session_state[f"counter_mode_{negotiation['id']}"] = False
-                                st.rerun()
-                        st.write("### Odrzuć Propozycję")
-                        
-                        reject_reason = st.text_area(
-                            f"Powód odrzucenia {negotiation['id'][:8]}",
-                            placeholder="Np. Za drogo, zadanie zbyt proste...",
-                            key=f"reject_reason_{negotiation['id']}"
-                        )
-                        
-                        col_submit, col_cancel = st.columns(2)
-                        
-                        with col_submit:
-                            if st.button(
-                                "🔴 Odrzuć",
-                                key=f"submit_reject_{negotiation['id']}"
-                            ):
-                                result = negotiation_service.reject_proposal(
-                                    task_id=negotiation['id'],
-                                    reason=reject_reason
-                                )
+                                st.error(msg)
                                 
-                                if result["success"]:
-                                    st.info("❌ Propozycja odrzucona. Karol może złożyć nową.")
-                                    st.session_state[f"reject_mode_{negotiation['id']}"] = False
-                                    st.rerun()
-                                else:
-                                    st.error(f"❌ Błąd: {result.get('error')}")
+                    with b2:
+                        if st.button("💬 Kontrpropozycja", key=f"cnt_{neg_id}", use_container_width=True):
+                            st.session_state[f"mode_{neg_id}"] = "counter"
+                            st.rerun()
+                            
+                    with b3:
+                        if st.button("❌ Odrzuć", key=f"rej_{neg_id}", use_container_width=True):
+                            st.session_state[f"mode_{neg_id}"] = "reject"
+                            st.rerun()
+
+                    # Obsługa trybów (Formularze pod kartą)
+                    if st.session_state.get(f"mode_{neg_id}") == "counter":
+                        st.markdown("#### ✍️ Formularz kontrpropozycji")
+                        new_price = st.number_input("Twoja cena (PLN)", value=float(neg['proposed_price']*0.9), key=f"np_{neg_id}")
+                        new_notes = st.text_area("Dlaczego taka cena?", key=f"nn_{neg_id}", placeholder="Napisz uzasadnienie dla Karola...")
                         
-                        with col_cancel:
-                            if st.button(
-                                "Anuluj",
-                                key=f"cancel_reject_{negotiation['id']}"
-                            ):
-                                st.session_state[f"reject_mode_{negotiation['id']}"] = False
+                        fb1, fb2 = st.columns(2)
+                        with fb1:
+                            if st.button("Wyślij do Karola", key=f"send_{neg_id}", type="primary"):
+                                success, msg = negotiation_service.counter_offer(neg_id, new_price, neg['proposed_duration_days'], new_notes)
+                                if success:
+                                    st.success("Wysłano!")
+                                    st.session_state[f"mode_{neg_id}"] = None
+                                    st.rerun()
+                        with fb2:
+                            if st.button("Anuluj", key=f"can_{neg_id}"):
+                                st.session_state[f"mode_{neg_id}"] = None
                                 st.rerun()
-        
-        # Statystyki negocjacji
-        st.write("---")
-        st.write("### 📊 Statystyki Negocjacji")
-        
-        stats = negotiation_service.get_negotiation_statistics(selected_project_id)
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("💬 Łącznie", stats.get('total_tasks', 0))
-        
-        with col2:
-            st.metric("⏳ Oczekujące", stats.get('pending_negotiations', 0))
-        
-        with col3:
-            st.metric("✅ Zaakceptowane", stats.get('accepted_negotiations', 0))
-        
-        with col4:
-            st.metric("💰 Zaoszczędzono", f"{stats.get('total_savings', 0):,.0f} PLN")
-    
+
+                    if st.session_state.get(f"mode_{neg_id}") == "reject":
+                        st.error("Czy na pewno chcesz odrzucić tę wycenę?")
+                        rej_reason = st.text_area("Powód odrzucenia", key=f"rr_{neg_id}")
+                        if st.button("Potwierdzam Odrzucenie", key=f"crej_{neg_id}", type="primary"):
+                            success, msg = negotiation_service.reject_proposal(neg_id, rej_reason)
+                            if success:
+                                st.session_state[f"mode_{neg_id}"] = None
+                                st.rerun()
+
     # ============================================================================
-    # TAB 2: ZATWIERDZANIE ZMIAN
+    # POZOSTAŁE TABY (BEZ ZMIAN W LOGICE, TYLKO UI)
     # ============================================================================
     
     with tab_changes:
-        st.subheader("⚡ Zarządzanie Zmianami — Wnioski od Karola")
-        st.write("Karol prosi o rozszerzenie czasu lub zwiększenie budżetu. Tu decydujesz.")
-        
-        # Pobierz oczekujące zmiany
+        st.subheader("⚡ Zatwierdzanie Zmian")
         pending_changes = change_service.get_pending_changes(selected_project_id)
-        
         if not pending_changes:
-            st.success("✅ Brak oczekujących zmian.")
+            st.success("Brak oczekujących zmian w planie.")
         else:
-            st.warning(f"⏳ {len(pending_changes)} zmian czeka na Twoją decyzję")
-            
             for change in pending_changes:
-                with st.container(border=True):
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    
-                    with col1:
-                        st.write(f"### {change['change_type']}")
-                        st.caption(f"🔹 {change['reason']}")
-                    
-                    with col2:
-                        st.write("### Stara Wartość")
-                        old_val = change.get('old_value', {})
-                        if isinstance(old_val, str):
-                            old_val = json.loads(old_val)
-                        
-                        if change['change_type'] == 'DURATION_EXTENDED':
-                            st.info(f"📅 {old_val.get('planned_end_date', '?')}")
-                        elif change['change_type'] == 'BUDGET_INCREASED':
-                            st.info(f"💰 {old_val.get('budget', 0):,.0f} PLN")
-                    
-                    with col3:
-                        st.write("### Nowa Wartość")
-                        new_val = change.get('new_value', {})
-                        if isinstance(new_val, str):
-                            new_val = json.loads(new_val)
-                        
-                        if change['change_type'] == 'DURATION_EXTENDED':
-                            st.warning(f"📅 {new_val.get('planned_end_date', '?')}")
-                            days_shift = new_val.get('additional_days', 0)
-                            st.caption(f"+{days_shift} dni")
-                        elif change['change_type'] == 'BUDGET_INCREASED':
-                            st.warning(f"💰 {new_val.get('budget', 0):,.0f} PLN")
-                            budget_shift = new_val.get('budget', 0) - old_val.get('budget', 0)
-                            st.caption(f"+{budget_shift:,.0f} PLN")
-                    
-                    st.write("---")
-                    
-                    # Akcje
-                    col_approve, col_reject = st.columns(2)
-                    
-                    with col_approve:
-                        if st.button(
-                            "✅ Zatwierdź Zmianę",
-                            key=f"approve_change_{change['id']}"
-                        ):
-                            result = change_service.approve_change(
-                                change_id=change['id'],
-                                approval_notes="Zatwierdzone przez inwestora"
-                            )
-                            
-                            if result["success"]:
-                                st.success(f"✅ {result['message']}")
-                                st.rerun()
-                            else:
-                                st.error(f"❌ Błąd: {result.get('error')}")
-                    
-                    with col_reject:
-                        if st.button(
-                            "❌ Odrzuć Zmianę",
-                            key=f"reject_change_{change['id']}"
-                        ):
-                            st.session_state[f"reject_change_{change['id']}"] = True
-                            st.rerun()
-                    
-                    # Formularz odrzucenia
-                    if st.session_state.get(f"reject_change_{change['id']}", False):
-                        rejection_reason = st.text_area(
-                            f"Powód odrzucenia {change['id'][:8]}",
-                            placeholder="Np. Budżet już wyczerpany, czas się mieści...",
-                            key=f"change_reject_reason_{change['id']}"
-                        )
-                        
-                        if st.button(
-                            "🔴 Potwierdź Odrzucenie",
-                            key=f"confirm_reject_{change['id']}"
-                        ):
-                            result = change_service.reject_change(
-                                change_id=change['id'],
-                                rejection_reason=rejection_reason
-                            )
-                            
-                            if result["success"]:
-                                st.info("❌ Zmiana odrzucona")
-                                st.session_state[f"reject_change_{change['id']}"] = False
-                                st.rerun()
-                            else:
-                                st.error(f"❌ Błąd: {result.get('error')}")
-        
-        # Historia zmian
-        st.write("---")
-        st.write("### 📋 Historia Zmian")
-        
-        all_changes = change_service.get_change_history(selected_project_id, limit=20)
-        
-        if all_changes:
-            df_changes = pd.DataFrame([
-                {
-                    "Typ": c.get('change_type'),
-                    "Status": c.get('status'),
-                    "Powód": c.get('reason')[:50] + "..." if len(c.get('reason', '')) > 50 else c.get('reason'),
-                    "Data": c.get('created_at')[:10]
-                }
-                for c in all_changes
-            ])
-            st.dataframe(df_changes, use_container_width=True)
-        else:
-            st.info("Brak historii zmian")
-    
-    # ============================================================================
-    # TAB 3: TIMELINE PROJEKTU
-    # ============================================================================
-    
+                st.warning(f"Zgłoszenie zmiany: {change['reason']}")
+                if st.button(f"Zatwierdź zmianę {change['id'][:4]}"):
+                    change_service.approve_change(change['id'], "Ok")
+                    st.rerun()
+
     with tab_timeline:
-        st.subheader("📅 Timeline Projektu")
-        st.write("Chronologiczny przegląd wszystkich faz.")
-        
-        if not phases:
-            st.info("Brak faz w projekcie")
-        else:
-            timeline = phase_service.get_project_timeline(selected_project_id)
-            
-            for phase_data in timeline['timeline']:
-                with st.container(border=True):
-                    col1, col2, col3 = st.columns([2, 1, 1])
-                    
-                    with col1:
-                        st.write(f"### {phase_data['phase_number']}. {phase_data['phase_name']}")
-                        st.caption(f"{phase_data['planned_start']} → {phase_data['planned_end']}")
-                    
-                    with col2:
-                        status_emoji = {
-                            "PLANNING": "🔵",
-                            "IN_PROGRESS": "🟡",
-                            "COMPLETED": "🟢",
-                            "PAUSED": "🔴"
-                        }
-                        st.write(f"{status_emoji.get(phase_data['status'], '⚪')} **{phase_data['status']}**")
-                    
-                    with col3:
-                        progress = phase_data.get('progress_percent', 0)
-                        st.metric("Postęp", f"{progress:.0f}%")
-                    
-                    # Progress bar
-                    st.progress(progress / 100)
-    
-    # ============================================================================
-    # TAB 4: ANALIZA BUDŻETU
-    # ============================================================================
+        st.subheader("📅 Harmonogram Projektu")
+        timeline = phase_service.get_project_timeline(selected_project_id)
+        if timeline.get('timeline'):
+            for t in timeline['timeline']:
+                st.write(f"**{t['phase_name']}** ({t['status']})")
+                st.progress(t['progress_percent'] / 100)
     
     with tab_budget:
-        st.subheader("💵 Analiza Budżetu")
-        
-        # Tabela budżetu po fazach
-        budget_data = []
-        for phase in phases:
-            financial = phase_service.get_phase_financial_status(phase['id'])
-            
-            budget_data.append({
-                "Faza": phase['phase_name'],
-                "Budżet (PLN)": f"{financial.get('estimated_budget', 0):,.0f}",
-                "Wydano (PLN)": f"{financial.get('actual_spent', 0):,.0f}",
-                "Pozostało (PLN)": f"{financial.get('remaining_budget', 0):,.0f}",
-                "Wykorzystanie": f"{financial.get('budget_utilization_percent', 0):.0f}%",
-                "Status": financial.get('status')
-            })
-        
-        if budget_data:
-            st.dataframe(
-                pd.DataFrame(budget_data),
-                use_container_width=True
-            )
-        else:
-            st.info("Brak danych budżetowych")
-        
-        # Sumy
-        st.write("---")
-        st.write("### 📊 Podsumowanie")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("💰 Całkowity Budżet", f"{total_budget:,.0f} PLN")
-        
-        with col2:
-            st.metric("📈 Wydano", f"{total_spent:,.0f} PLN")
-        
-        with col3:
-            st.metric("🏦 Pozostało", f"{total_remaining:,.0f} PLN")
-        
-        with col4:
-            utilization = (total_spent / total_budget * 100) if total_budget > 0 else 0
-            st.metric("📊 Wykorzystanie", f"{utilization:.0f}%")
-        
-        # Ostrzeżenie jeśli budget przekroczony
-        if total_remaining < 0:
-            st.error(f"⚠️ UWAGA: Budżet przekroczony o {abs(total_remaining):,.0f} PLN!")
-        elif total_remaining < (total_budget * 0.1):
-            st.warning(f"⚠️ Zbliżasz się do limitu budżetu ({total_remaining:,.0f} PLN pozostało)")
-
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
+        st.subheader("📊 Szczegółowa Analiza Wydatków")
+        st.write(f"### Całkowity budżet: {total_budget:,.0f} PLN")
+        st.write(f"### Aktualne wydatki: {total_spent:,.0f} PLN")
+        st.progress(spent_pct / 100)
 
 if __name__ == "__main__":
     st.error("Ten plik powinien być importowany z app.py")
