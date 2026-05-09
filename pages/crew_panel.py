@@ -162,14 +162,7 @@ def render_new_quote_card(task, negotiation_service):
     """Karta do wysłania nowej wyceny."""
     with st.container(border=True):
         st.markdown(f"### 📍 {task['name']}")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            p = st.number_input("Cena", min_value=0.0, value=1000.0, key=f"new_p_{task['id']}")
-        with col2:
-            # col2 not defined in this scope, fixing to c2
-            pass
         
-        # FIXING THE CARD LOGIC TO MATCH USER'S PREMIUM STYLE
         col1, col2, col3 = st.columns(3)
         with col1:
             p = st.number_input("Cena (zł)", min_value=0.0, value=1000.0, key=f"p_n_{task['id']}")
@@ -178,7 +171,7 @@ def render_new_quote_card(task, negotiation_service):
         with col3:
             n = st.text_input("Notatka", key=f"n_n_{task['id']}")
             
-        if st.button("Wyślij wycenę", key=f"btn_n_{task['id']}"):
+        if st.button("Wyślij wycenę", key=f"btn_n_{task['id']}", use_container_width=True):
             success, msg, _ = negotiation_service.propose_price(task['id'], 'crew', p, int(d), n)
             if success:
                 st.success(msg)
