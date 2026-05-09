@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-004"
+APP_VERSION = "sprint23-50-100-deploy-fix-005"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -464,7 +464,11 @@ def render_crew_dashboard(project_id: str, crew_member_id: str, crew_name: str =
             for phase, group in df_plan.groupby("phase_name"):
                 with st.expander(f"📍 {phase} ({len(group)} zadań)"):
                     for _, row in group.iterrows():
-                        st.write(f"- {row['task_name']} ({row['difficulty']} | {row['estimated_hours']}h) - **{row['kanban_status']}**")
+                        task_label = row.get('name') or row.get('task_name') or "Bez nazwy"
+                        diff = row.get('difficulty', 'MEDIUM')
+                        hours = row.get('estimated_hours', 0)
+                        status = row.get('kanban_status', 'TODO')
+                        st.write(f"- {task_label} ({diff} | {hours}h) - **{status}**")
         else:
             st.info("Plan jest jeszcze pusty. Dodaj pierwsze zadania powyżej.")
 
