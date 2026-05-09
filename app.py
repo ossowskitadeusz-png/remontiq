@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-003"
+APP_VERSION = "sprint23-50-100-deploy-fix-004"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -1846,6 +1846,37 @@ if st.session_state['role'] == "crew":
                         st.rerun()
 
             st.divider()
+            with st.form("material_reimbursement_form"):
+                st.write("### 🛒 Zwrot za materiały")
+                st.caption("Użyj tego formularza, jeśli kupiłeś materiały za własne pieniądze.")
+                reimb_amount = st.number_input("Kwota z paragonu/faktury (PLN)", min_value=0.0, step=10.0)
+                reimb_note = st.text_input("Na co wydano? (krótki opis)")
+                
+                if st.form_submit_button("Zgłoś wydatek do zwrotu"):
+                    if reimb_amount > 0 and reimb_note:
+                        import json
+                        log_data = {
+                            "amount": reimb_amount,
+                            "note": reimb_note,
+                            "payment_type": "REIMBURSEMENT",
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        supabase.table("project_logs").insert({
+                            "project_id": p_id,
+                            "type": "payment_request",
+                            "title": f"Zwrot za materiały: {money(reimb_amount)}",
+                            "description": reimb_note,
+                            "data": json.dumps(log_data),
+                            "status": "SUBMITTED"
+                        }).execute()
+                        add_activity_log("Karol", "FINANCIAL", p_id, f"Zgłoszono zwrot za materiały: {money(reimb_amount)}")
+                        st.success("✅ Zgłoszono!")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Podaj kwotę i opis zakupów.")
+
+            st.divider()
             st.caption("ℹ️ Model Hybrydowy 50/100: 100% DONE | 50% TODO/IN_PROGRESS | 0% BLOCKED | Global Cap 30%.")
             
 
@@ -2536,6 +2567,7 @@ elif menu == "settlements":
                     # Badge typu
                     if req_type == "ADVANCE": st.warning("💸 Typ: ZALICZKA (Prace w toku)")
                     elif req_type == "FINAL": st.success("✅ Typ: ROZLICZENIE KOŃCOWE (Prace DONE)")
+                    elif req_type == "REIMBURSEMENT": st.error("🛒 Typ: ZWROT ZA MATERIAŁY (Wydatki własne)")
                     else: st.info("🔀 Typ: MIESZANY (Zaliczka + Prace DONE)")
                     
                     st.write(f"📅 Data: {req['created_at'][:10]} | Autor: **Karol**")
