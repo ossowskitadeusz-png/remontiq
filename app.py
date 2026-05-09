@@ -162,33 +162,41 @@ TASK_STATUSES = {
 }
 
 def process_task_handshake(task_id, action, actor_role, price=None, comment=""):
-    """Obsługuje logikę uścisku dłoni między Inwestorem a Karolem."""
+    """Obsługuje logikę uścisku dłoni (Wersja bezpieczna - Schema-Agnostic)."""
     try:
-        update_data = {"updated_at": datetime.now().isoformat()}
+        # Pobieramy obecne zadanie, by zachować opis
+        t = supabase.table("tasks").select("*").eq("id", task_id).single().execute().data
+        desc = t.get('description', '') or ''
         
-        if action == "SUBMIT_VALUATION" and actor_role == "crew":
-            update_data.update({
-                "status": "PROPOSED_BY_CREW",
-                "crew_price": price,
-                "crew_comment": comment
-            })
-        elif action == "ACCEPT" and actor_role == "investor":
-            update_data.update({
-                "status": "ACCEPTED_LOCKED",
-                "locked_price": price,
-                "kanban_status": "TODO" # Automatycznie trafia na tablicę
-            })
-        elif action == "COUNTER_OFFER" and actor_role == "investor":
-            update_data.update({
-                "status": "CHANGES_REQUESTED",
-                "investor_price": price,
-                "investor_comment": comment
-            })
-            
+        new_status = "DRAFT"
+        if action == "SUBMIT_VALUATION": new_status = "PROPOSED_BY_CREW"
+        elif action == "ACCEPT": new_status = "ACCEPTED_LOCKED"
+        elif action == "COUNTER_OFFER": new_status = "CHANGES_REQUESTED"
+
+        # Pakujemy dane do opisu (zabezpieczenie przed brakiem kolumn)
+        meta_tag = f"--- DANE NEGOCJACYJNE ---\nCENA: {price}\nSTATUS: {new_status}\nKOMENTARZ: {comment}\n------------------------\n\n"
+        # Usuwamy stary tag jeśli był
+        if "--- DANE NEGOCJACYJNE ---" in desc:
+            desc = desc.split("------------------------")[-1].strip()
+        
+        new_desc = meta_tag + desc
+        
+        update_data = {
+            "description": new_desc,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        # Jeśli jednak kolumna status istnieje, spróbujmy ją też zaktualizować (opcjonalnie)
+        try: supabase.table("tasks").update({"status": new_status}).eq("id", task_id).execute()
+        except: pass
+        
+        if action == "ACCEPT":
+            try: supabase.table("tasks").update({"kanban_status": "TODO"}).eq("id", task_id).execute()
+            except: pass
+
         supabase.table("tasks").update(update_data).eq("id", task_id).execute()
         
-        # Logujemy to w historii projektu
-        add_activity_log(actor_role, f"TASK_HANDSHAKE: {action}", "ALL", f"Zadanie {task_id}: {price} PLN | {comment}")
+        add_activity_log(actor_role, f"HANDSHAKE_{action}", "ALL", f"Zadanie {task_id} -> {price}")
         return True
     except Exception as e:
         st.error(f"Błąd Handshake: {e}")
@@ -1482,13 +1490,15 @@ if st.session_state['role'] == "crew":
                     
                     if st.form_submit_button("Weryfikuj i wyślij do Inwestora"):
                         if t_title and t_price > 0:
+                            # Używamy tylko kolumn, które na 100% istnieją w Twojej tabeli tasks
+                            # Dane negocjacyjne "ukrywamy" w opisie, dopóki nie rozbudujemy bazy
+                            full_desc = f"--- DANE NEGOCJACYJNE ---\nCENA_KAROLA: {t_price}\nSTATUS: PROPOSED_BY_CREW\n------------------------\n\n{t_desc}"
+                            
                             supabase.table("tasks").insert({
                                 "project_id": p_id,
                                 "name": t_title,
-                                "description": t_desc,
-                                "crew_price": t_price,
+                                "description": full_desc,
                                 "estimated_hours": t_hours,
-                                "status": "PROPOSED_BY_CREW",
                                 "kanban_status": "BACKLOG"
                             }).execute()
                             st.success("✅ Wysłano propozycję do Inwestora!")
@@ -1500,30 +1510,33 @@ if st.session_state['role'] == "crew":
             
             # --- LISTA ZADAŃ DO WYCENY / NEGOCJACJI ---
             st.write("### Twoje zadania i negocjacje")
-            tasks = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
+            try:
+                all_t = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
+                tasks = [t for t in all_t if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '')]
+                tasks = [t for t in tasks if "STATUS: ACCEPTED_LOCKED" not in (t.get('description') or '')]
+            except:
+                tasks = []
             
             if tasks:
                 for t in tasks:
-                    # Pokazujemy tylko te, które nie są jeszcze zatwierdzone
-                    if t['status'] in ["TO_BE_VALUED", "PROPOSED_BY_CREW", "CHANGES_REQUESTED"]:
-                        with st.container(border=True):
-                            c1, c2 = st.columns([3, 1])
-                            with c1:
-                                st.write(f"**{t['name']}**")
-                                st.caption(f"Status: {TASK_STATUSES.get(t['status'], t['status'])}")
-                                if t['status'] == "CHANGES_REQUESTED":
-                                    st.warning(f"💬 Inwestor proponuje: {t.get('investor_price')} PLN. Komentarz: {t.get('investor_comment', '-')}")
-                            
-                            with c2:
-                                if t['status'] == "TO_BE_VALUED":
-                                    new_val = st.number_input("Wyceń (PLN)", key=f"val_{t['id']}")
-                                    if st.button("Wyślij wycenę", key=f"btn_val_{t['id']}"):
-                                        process_task_handshake(t['id'], "SUBMIT_VALUATION", "crew", price=new_val)
-                                        st.rerun()
-                                else:
-                                    st.write(f"{t.get('crew_price', 0)} PLN")
+                    desc_f = t.get('description', '') or ''
+                    t_status = "PROPOSED_BY_CREW"
+                    if "STATUS: " in desc_f: t_status = desc_f.split("STATUS: ")[1].split("\n")[0]
+                    
+                    with st.container(border=True):
+                        c1, c2 = st.columns([3, 1])
+                        with c1:
+                            st.write(f"**{t.get('name', 'Bez nazwy')}**")
+                            st.caption(f"Status: {TASK_STATUSES.get(t_status, t_status)}")
+                            if t_status == "CHANGES_REQUESTED":
+                                inv_p = desc_f.split("CENA: ")[1].split("\n")[0] if "CENA: " in desc_f else "0"
+                                inv_msg = desc_f.split("KOMENTARZ: ")[1].split("\n")[0] if "KOMENTARZ: " in desc_f else "-"
+                                st.warning(f"💬 Inwestor proponuje: {inv_p} PLN. Komentarz: {inv_msg}")
+                        with c2:
+                            c_p = desc_f.split("CENA: ")[1].split("\n")[0] if "CENA: " in desc_f else "0"
+                            st.write(f"{c_p} PLN")
             else:
-                st.info("Brak aktywnych zadań w planie.")
+                st.info("Brak aktywnych negocjacji.")
 
         with tab_settlement:
             st.subheader("Wniosek o wypłatę (Dynamiczny Limit)")
@@ -2298,9 +2311,13 @@ elif menu == "9. 🤝 Negocjacje i Planowanie":
     st.title("🤝 Negocjacje i Planowanie")
     st.write("Tutaj zatwierdzasz nowe roboty i negocjujesz wyceny z Karolem.")
     
-    # Pobieramy zadania w statusach negocjacyjnych
+    # Pobieramy wszystkie zadania i filtrujemy te z tagiem negocjacyjnym
     try:
-        tasks = supabase.table("tasks").select("*").in_("status", ["PROPOSED_BY_CREW", "CHANGES_REQUESTED", "TO_BE_VALUED"]).execute().data or []
+        all_tasks = supabase.table("tasks").select("*").execute().data or []
+        # Szukamy zadań, które mają tag negocjacyjny w opisie LUB status (jeśli kolumna istnieje)
+        tasks = [t for t in all_tasks if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '') or t.get('status') in ["PROPOSED_BY_CREW", "CHANGES_REQUESTED", "TO_BE_VALUED"]]
+        # Ale wykluczamy te już zaakceptowane (żeby nie wisiały w negocjacjach)
+        tasks = [t for t in tasks if "STATUS: ACCEPTED_LOCKED" not in (t.get('description') or '')]
     except:
         tasks = []
         
@@ -2309,15 +2326,27 @@ elif menu == "9. 🤝 Negocjacje i Planowanie":
     else:
         for t in tasks:
             with st.container(border=True):
+                # Ekstrakcja danych z "zaszytego" tagu
+                desc_full = t.get('description', '') or ''
+                crew_p = 0
+                t_status = t.get('status', 'TO_BE_VALUED')
+                
+                if "CENA: " in desc_full:
+                    try: crew_p = float(desc_full.split("CENA: ")[1].split("\n")[0])
+                    except: pass
+                if "STATUS: " in desc_full:
+                    t_status = desc_full.split("STATUS: ")[1].split("\n")[0]
+
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    st.subheader(f"Zadanie: {t.get('name', t.get('title', 'Bez nazwy'))}")
-                    st.write(f"Status: **{TASK_STATUSES.get(t['status'], t['status'])}**")
-                    st.write(f"Opis: {t.get('description', 'Brak opisu')}")
+                    st.subheader(f"Zadanie: {t.get('name', 'Bez nazwy')}")
+                    st.write(f"Status: **{TASK_STATUSES.get(t_status, t_status)}**")
+                    # Pokazujemy tylko czysty opis (bez tagu)
+                    clean_desc = desc_full.split("------------------------")[-1].strip() if "------------------------" in desc_full else desc_full
+                    st.write(f"Opis: {clean_desc}")
                 
                 with c2:
                     st.markdown("### 📊 Wycena")
-                    crew_p = t.get('crew_price', 0) or 0
                     st.metric("Cena Karola", f"{crew_p:,.2f} PLN")
                 
                 st.divider()
