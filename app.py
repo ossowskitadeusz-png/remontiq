@@ -1446,19 +1446,55 @@ if st.session_state['role'] == "crew":
                 st.info("Brak zadań do wyceny.")
 
         with tab_settlement:
-            st.subheader("Wniosek o rozliczenie tygodniowe")
-            earnings = calculate_weekly_bonus_v2(p_id, "KAROL_ID")
+            st.subheader("Wniosek o wypłatę (Dynamiczny Limit)")
             
-            c1, c2 = st.columns(2)
-            c1.metric("Podstawa (Gwarantowana)", f"{earnings['base']} PLN")
-            c2.metric("Bonus za jakość (Aktualny)", f"{earnings['bonus_amt']} PLN")
+            # 1. Obliczamy wartości
+            tasks = supabase.table("tasks").select("*").eq("project_id", p_id).execute().data or []
+            rates = {"EASY": 80, "MEDIUM": 100, "HARD": 150}
             
-            st.markdown("---")
-            st.warning("⚠️ Po kliknięciu poniższego przycisku, Inwestor otrzyma powiadomienie o gotowości do rozliczenia bieżącego tygodnia.")
+            total_val = sum(rates.get(t['difficulty'], 100) * t['estimated_hours'] for t in tasks)
+            done_val = sum(rates.get(t['difficulty'], 100) * t['estimated_hours'] for t in tasks if t['kanban_status'] == 'COMPLETED')
             
-            if st.button("🚀 GENERUJ I WYŚLIJ ROZLICZENIE DO INWESTORA", use_container_width=True, type="primary"):
-                add_activity_log("Karol", "payment_request", p_id, details=f"Wniosek o rozliczenie: {earnings['base'] + earnings['bonus_amt']} PLN")
-                st.success("✅ Wniosek został wysłany! Inwestor otrzymał powiadomienie.")
+            # Pobieramy sumę już wypłaconych/oczekujących (uproszczone z logów)
+            all_fin_logs = supabase.table("project_logs").select("*").eq("project_id", p_id).in_("type", ["payment_request", "FINANCIAL"]).execute().data or []
+            paid_pending_sum = 0
+            for l in all_fin_logs:
+                try:
+                    # Próbujemy wyciągnąć kwotę z tekstu "Wniosek o rozliczenie: 1200.0 PLN"
+                    val_str = l['details'].split(':')[-1].replace('PLN', '').strip()
+                    paid_pending_sum += float(val_str)
+                except: continue
+
+            available_to_withdraw = max(0.0, done_val - paid_pending_sum)
+            
+            # 2. UI Metrics
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Wartość ukończona", f"{done_val:,.2f} PLN")
+            c2.metric("Pobrano / Zablokowano", f"{paid_pending_sum:,.2f} PLN")
+            c3.metric("DOSTĘPNE TERAZ", f"{available_to_withdraw:,.2f} PLN", delta=None, delta_color="normal")
+            
+            # 3. Progress Bar
+            progress_pct = min(paid_pending_sum / total_val, 1.0) if total_val > 0 else 0
+            st.progress(progress_pct, text=f"Wykorzystanie kontraktu: {progress_pct*100:.1f}%")
+            
+            st.divider()
+            
+            # 4. Formularz wniosku
+            req_amount = st.number_input("Kwota wniosku (PLN)", min_value=0.0, max_value=100000.0, step=100.0, format="%.2f")
+            
+            can_submit = req_amount > 0 and req_amount <= available_to_withdraw
+            
+            if req_amount > available_to_withdraw:
+                st.error(f"❌ Przekroczono limit! Maksymalnie możesz wypłacić {available_to_withdraw:,.2f} PLN (za ukończone prace).")
+            elif req_amount > 0:
+                st.success(f"✅ Kwota poprawna. Możesz wysłać wniosek.")
+            
+            note = st.text_input("Komentarz do wniosku", placeholder="np. Rozliczenie tygodniowe, zaliczka na narzędzia...")
+            
+            if st.button("🚀 WYŚLIJ WNIOSEK DO INWESTORA", use_container_width=True, type="primary", disabled=not can_submit):
+                add_activity_log("Karol", "payment_request", p_id, details=f"Wniosek o rozliczenie: {req_amount} PLN | Komentarz: {note}")
+                st.success(f"✅ Wniosek o {req_amount} PLN został wysłany!")
+                st.rerun()
 
         if st.button("⬅️ Powrót do Zadania", use_container_width=True):
             st.session_state['crew_menu_active'] = None
