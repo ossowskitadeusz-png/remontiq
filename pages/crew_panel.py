@@ -184,17 +184,14 @@ def render_crew_panel(
                         st.success(result["message"])
                         st.rerun()
                     else:
-                        st.error(f"❌ Błąd: {result.get('error')}")
-    
-    # ============================================================================
-    # TAB 2: PROPOZYCJE CEN
+                        st.error(f"❌ Błąd: {result.get('err    # TAB 2: PROPOZYCJE CEN
     # ============================================================================
     
     with tab_proposals:
         st.subheader("💰 Moje Propozycje Cen")
         st.write("Tutaj możesz proponować ceny za zadania. Inwestor je zatwierdzi lub zaproponuje kontrpropozycję.")
         
-        # Pobierz zadania bez wyceny
+        # 1. ZADANIA CZEKAJĄCE NA PIERWSZĄ WYCENĘ
         try:
             tasks_response = supabase.table("tasks").select(
                 "id, name, phase_id, description, commercial_status"
@@ -205,83 +202,100 @@ def render_crew_panel(
             st.error(f"Błąd: {str(e)}")
             tasks = []
         
-        if not tasks:
-            st.info("Brak zadań w tym projekcie.")
+        # Filtruj zadania, które nie mają jeszcze negocjacji
+        tasks_to_quote = [
+            t for t in tasks
+            if t.get("commercial_status") in ["not_started", "rejected"]
+        ]
+        
+        if tasks_to_quote:
+            st.write(f"### 📋 Zadania do wyceny ({len(tasks_to_quote)})")
+            for task in tasks_to_quote:
+                with st.container(border=True):
+                    st.write(f"**{task['name']}**")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        price = st.number_input(f"Cena {task['id'][:4]}", min_value=0.0, value=500.0, key=f"p_{task['id']}")
+                    with col2:
+                        days = st.number_input(f"Dni {task['id'][:4]}", min_value=1, value=1, key=f"d_{task['id']}")
+                    with col3:
+                        notes = st.text_input(f"Uwagi {task['id'][:4]}", key=f"n_{task['id']}")
+                    
+                    if st.button("Wyślij Wycenę", key=f"btn_{task['id']}"):
+                        success, msg, neg_id = negotiation_service.propose_price(
+                            task_id=task['id'],
+                            proposed_by='crew',
+                            price=price,
+                            duration_days=int(days),
+                            notes=notes
+                        )
+                        if success:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+        # 2. KONTRPROPOZYCJE OD INWESTORA (WYMAGAJĄ REAKCJI KAROLA)
+        st.write("---")
+        st.write("### 💬 Kontrpropozycje od Inwestora (Wymagają Twojej decyzji)")
+        
+        pending_for_crew = negotiation_service.get_pending_for_crew(selected_project_id)
+        
+        if not pending_for_crew:
+            st.info("Brak oczekujących kontrpropozycji od Inwestora.")
         else:
-            # Filtruj zadania bez wyceny
-            tasks_without_price = [
-                t for t in tasks
-                if t.get("commercial_status") not in ["ACCEPTED_LOCKED", "PROPOSED_BY_CREW"]
-            ]
-            
-            if not tasks_without_price:
-                st.success("✅ Wszystkie zadania mają propozycje cen!")
-            else:
-                st.write(f"### Zadania czekające na wycenę ({len(tasks_without_price)})")
-                
-                for task in tasks_without_price:
-                    with st.container(border=True):
-                        st.write(f"**{task['name']}**")
-                        if task.get('description'):
-                            st.caption(task['description'])
-                        
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            price = st.number_input(
-                                f"Cena {task['id'][:8]}",
-                                min_value=0.0,
-                                value=1000.0,
-                                step=50.0,
-                                key=f"price_{task['id']}"
-                            )
-                        
-                        with col2:
-                            hours = st.number_input(
-                                f"Godziny {task['id'][:8]}",
-                                min_value=1,
-                                value=8,
-                                key=f"hours_{task['id']}"
-                            )
-                        
-                        with col3:
-                            notes = st.text_input(
-                                f"Notatka {task['id'][:8]}",
-                                placeholder="np. Wymaga materiałów...",
-                                key=f"notes_{task['id']}"
-                            )
-                        
-                        if st.button(
-                            "💰 Wyślij Wycenę",
-                            key=f"submit_price_{task['id']}"
-                        ):
-                            result = negotiation_service.propose_crew_price(
-                                task_id=task['id'],
-                                proposed_price=price,
-                                proposed_hours=int(hours),
-                                notes=notes
-                            )
-                            
-                            if result["success"]:
-                                st.success(f"✅ {result['message']}")
+            for neg in pending_for_crew:
+                task_name = neg.get('tasks', {}).get('name', 'Zadanie')
+                with st.container(border=True):
+                    st.write(f"**{task_name}**")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("**Twoja cena:**")
+                        st.write(f"{neg['proposed_price']} PLN")
+                    with col2:
+                        st.warning("**Propozycja Inwestora:**")
+                        st.write(f"{neg['response_price']} PLN")
+                        if neg.get('response_notes'):
+                            st.caption(f"Uzasadnienie: {neg['response_notes']}")
+                    
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Akceptuję cenę Inwestora", key=f"crew_acc_{neg['id']}"):
+                            success, msg = negotiation_service.crew_accept_counter_offer(neg['id'])
+                            if success:
+                                st.success(msg)
                                 st.rerun()
                             else:
-                                st.error(f"❌ Błąd: {result.get('error')}")
-        
-        # Pobierz oczekujące negocjacje
-        st.write("### ⏳ Oczekujące na zatwierdzenie")
-        pending = negotiation_service.get_pending_negotiations(selected_project_id)
-        
-        if pending:
-            df_pending = pd.DataFrame([
-                {
-                    "Zadanie": p.get('name'),
-                    "Moja cena (PLN)": p.get('crew_price'),
-                    "Kontrpropozycja": p.get('investor_counter_price', '—'),
-                    "Status": p.get('commercial_status')
-                }
-                for p in pending
-            ])
+                                st.error(msg)
+                    with c2:
+                        if st.button("🔄 Wyślij nową propozycję", key=f"crew_rev_{neg['id']}"):
+                            st.session_state[f"crew_rev_mode_{neg['id']}"] = True
+                            st.rerun()
+                    
+                    if st.session_state.get(f"crew_rev_mode_{neg['id']}", False):
+                        new_p = st.number_input("Twoja nowa cena", value=float(neg['proposed_price']), key=f"new_p_{neg['id']}")
+                        if st.button("Wyślij nową ofertę", key=f"send_new_{neg['id']}"):
+                            success, msg = negotiation_service.crew_counter_counter_offer(
+                                negotiation_id=neg['id'],
+                                crew_counter_price=new_p,
+                                crew_counter_duration_days=int(neg['proposed_duration_days'])
+                            )
+                            if success:
+                                st.success(msg)
+                                st.session_state[f"crew_rev_mode_{neg['id']}"] = False
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+        # 3. STATUS MOICH WYSŁANYCH PROPOZYCJI
+        st.write("---")
+        st.write("### ⏳ Wysłane propozycje (Czekają na Inwestora)")
+        pending_for_investor = negotiation_service.get_pending_for_investor(selected_project_id)
+        if pending_for_investor:
+            for p in pending_for_investor:
+                st.info(f"🔹 {p.get('tasks', {}).get('name')}: {p['proposed_price']} PLN (Status: {p['status']})")
+        else:
+            st.caption("Brak propozycji czekających na ruch Inwestora.")
             st.dataframe(df_pending, use_container_width=True)
         else:
             st.info("Brak oczekujących negocjacji")

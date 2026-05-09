@@ -110,14 +110,8 @@ def render_investor_panel(
     with tab_negotiations:
         st.subheader("💰 Negocjacje Cen — Propozycje od Karola")
         
-        # Pobierz oczekujące negocjacje
-        pending_negotiations = negotiation_service.get_pending_negotiations(selected_project_id)
-        
-        # DEBUG (usuń po naprawieniu)
-        if not pending_negotiations:
-            st.caption(f"DEBUG: Szukam dla Projektu ID: {selected_project_id} | Znalazłem: 0")
-        else:
-            st.caption(f"DEBUG: Szukam dla Projektu ID: {selected_project_id} | Znalazłem: {len(pending_negotiations)}")
+        # Pobierz oczekujące negocjacje (NOWA METODA 2.0)
+        pending_negotiations = negotiation_service.get_pending_for_investor(selected_project_id)
         
         if not pending_negotiations:
             st.success("✅ Brak oczekujących negocjacji. Wszystko uzgodnione!")
@@ -125,28 +119,32 @@ def render_investor_panel(
             st.warning(f"⏳ {len(pending_negotiations)} negocjacji czeka na Twoją decyzję")
             
             for negotiation in pending_negotiations:
+                # Wyciągamy dane z joinowanej tabeli tasks
+                task_info = negotiation.get('tasks', {})
+                task_name = task_info.get('name', 'Zadanie bez nazwy')
+                task_desc = task_info.get('description', '')
+                
                 with st.container(border=True):
                     col1, col2, col3 = st.columns([2, 1, 1])
                     
                     with col1:
-                        st.write(f"**{negotiation['name']}**")
-                        if negotiation.get('description'):
-                            st.caption(negotiation.get('description'))
+                        st.write(f"**{task_name}**")
+                        if task_desc:
+                            st.caption(task_desc)
+                        st.caption(f"Status: {negotiation['status']}")
                     
                     with col2:
                         st.write("### Propozycja Karola")
-                        st.metric("Cena", f"{negotiation.get('crew_price', 0):,.0f} PLN")
-                        st.caption(f"{negotiation.get('estimated_hours', 0)} godzin")
+                        st.metric("Cena", f"{negotiation.get('proposed_price', 0):,.0f} PLN")
+                        st.caption(f"{negotiation.get('proposed_duration_days', 0)} dni")
                     
                     with col3:
                         st.write("### Twoja Kontrpropozycja")
-                        if negotiation.get('investor_counter_price'):
+                        if negotiation.get('response_price'):
                             st.metric(
                                 "Kontrpropozycja",
-                                f"{negotiation.get('investor_counter_price'):,.0f} PLN"
+                                f"{negotiation.get('response_price'):,.0f} PLN"
                             )
-                            diff = negotiation.get('crew_price', 0) - negotiation.get('investor_counter_price', 0)
-                            st.caption(f"Oszczędność: {diff:,.0f} PLN")
                         else:
                             st.info("Brak jeszcze kontrpropozycji")
                     
@@ -160,18 +158,16 @@ def render_investor_panel(
                             "✅ Zaakceptuj",
                             key=f"accept_{negotiation['id']}"
                         ):
-                            result = negotiation_service.accept_negotiation(
-                                task_id=negotiation['id'],
-                                accepted_price=negotiation.get('crew_price', 0),
-                                accepted_hours=negotiation.get('estimated_hours'),
-                                final_notes="Zaakceptowane przez inwestora"
+                            success, message = negotiation_service.accept_proposal(
+                                negotiation_id=negotiation['id'],
+                                investor_notes="Zaakceptowane przez inwestora"
                             )
                             
-                            if result["success"]:
-                                st.success("✅ Cena zatwierdzona!")
+                            if success:
+                                st.success(message)
                                 st.rerun()
                             else:
-                                st.error(f"❌ Błąd: {result.get('error')}")
+                                st.error(message)
                     
                     with action_col2:
                         if st.button(
@@ -186,68 +182,63 @@ def render_investor_panel(
                             "❌ Odrzuć",
                             key=f"reject_{negotiation['id']}"
                         ):
-                            st.session_state[f"reject_mode_{negotiation['id']}"] = True
-                            st.rerun()
+                            success, message = negotiation_service.reject_proposal(
+                                negotiation_id=negotiation['id'],
+                                investor_notes="Odrzucone przez inwestora"
+                            )
+                            if success:
+                                st.info(message)
+                                st.rerun()
+                            else:
+                                st.error(message)
                     
                     with action_col4:
-                        st.caption("📋 Historia")
+                        if st.button("📋 Szczegóły", key=f"details_{negotiation['id']}"):
+                            st.session_state[f"show_details_{negotiation['id']}"] = True
                     
-                    # Formularz kontrpropozycji (jeśli włączony)
+                    # Formularz kontrpropozycji
                     if st.session_state.get(f"counter_mode_{negotiation['id']}", False):
                         st.write("### Twoja Kontrpropozycja")
                         
                         counter_price = st.number_input(
                             f"Nowa cena {negotiation['id'][:8]}",
                             min_value=0.0,
-                            value=float(negotiation.get('crew_price', 0) * 0.8),
+                            value=float(negotiation.get('proposed_price', 0) * 0.9),
                             step=50.0,
-                            key=f"counter_price_{negotiation['id']}"
+                            key=f"cp_{negotiation['id']}"
                         )
                         
-                        counter_hours = st.number_input(
-                            f"Godziny {negotiation['id'][:8]}",
+                        counter_days = st.number_input(
+                            f"Dni {negotiation['id'][:8]}",
                             min_value=1,
-                            value=int(negotiation.get('estimated_hours', 8)),
-                            key=f"counter_hours_{negotiation['id']}"
+                            value=int(negotiation.get('proposed_duration_days', 1)),
+                            key=f"cd_{negotiation['id']}"
                         )
                         
                         counter_reason = st.text_area(
-                            f"Powód kontrpropozycji {negotiation['id'][:8]}",
-                            placeholder="Np. Cena za wysoka, możesz użyć tańszych materiałów...",
-                            key=f"counter_reason_{negotiation['id']}"
+                            "Powód",
+                            key=f"cr_{negotiation['id']}"
                         )
                         
-                        col_submit, col_cancel = st.columns(2)
-                        
-                        with col_submit:
-                            if st.button(
-                                "📤 Wyślij Kontrpropozycję",
-                                key=f"submit_counter_{negotiation['id']}"
-                            ):
-                                result = negotiation_service.make_counter_offer(
-                                    task_id=negotiation['id'],
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("Wyślij", key=f"send_c_{negotiation['id']}"):
+                                success, msg = negotiation_service.counter_offer(
+                                    negotiation_id=negotiation['id'],
                                     counter_price=counter_price,
-                                    counter_hours=int(counter_hours),
-                                    reason=counter_reason
+                                    counter_duration_days=int(counter_days),
+                                    counter_notes=counter_reason
                                 )
-                                
-                                if result["success"]:
-                                    st.success(f"✅ Kontrpropozycja wysłana! Oszczędzisz: {result.get('difference', 0):,.0f} PLN")
+                                if success:
+                                    st.success(msg)
                                     st.session_state[f"counter_mode_{negotiation['id']}"] = False
                                     st.rerun()
                                 else:
-                                    st.error(f"❌ Błąd: {result.get('error')}")
-                        
-                        with col_cancel:
-                            if st.button(
-                                "Anuluj",
-                                key=f"cancel_counter_{negotiation['id']}"
-                            ):
+                                    st.error(msg)
+                        with c2:
+                            if st.button("Anuluj", key=f"cancel_c_{negotiation['id']}"):
                                 st.session_state[f"counter_mode_{negotiation['id']}"] = False
                                 st.rerun()
-                    
-                    # Formularz odrzucenia (jeśli włączony)
-                    if st.session_state.get(f"reject_mode_{negotiation['id']}", False):
                         st.write("### Odrzuć Propozycję")
                         
                         reject_reason = st.text_area(
