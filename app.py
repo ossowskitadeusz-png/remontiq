@@ -2092,8 +2092,16 @@ elif menu == "8. 📈 Wyceny i Rozliczenia":
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     st.subheader(f"Wniosek: {req['title']}")
-                    st.write(f"Data zgłoszenia: {req['created_at'][:10]}")
-                    st.write(f"Szczegóły: {req.get('details', 'Brak szczegółów')}")
+                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]}")
+                    
+                    # Wyciąganie kwoty z tekstu (uproszczone dla demo)
+                    details_text = req.get('details', '')
+                    st.markdown(f"""
+                    <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; margin-top: 10px;">
+                        <span style="font-size: 14px; opacity: 0.7;">KWOTA WNIOSKOWANA:</span><br>
+                        <span style="font-size: 28px; font-weight: bold; color: #60a5fa;">{details_text.split(':')[-1] if ':' in details_text else 'Do ustalenia'}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
                 # SYMULACJA DANYCH DO SCORINGU
                 # W realnym systemie pobieramy to z bazy danych
