@@ -59,16 +59,25 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     st.markdown("---")
     
     # 3. TABY
-    tab_quotes, tab_counter, tab_accepted = st.tabs(["💰 Nowe Wyceny", "💬 Kontrpropozycje", "✅ Moje Umowy"])
+    tab_new_proposal, tab_quotes, tab_counter, tab_accepted = st.tabs([
+        "➕ Wyślij Nową Wycenę", 
+        "📤 Wysłane Propozycje", 
+        "💬 Kontrpropozycje", 
+        "✅ Moje Umowy"
+    ])
     
+    with tab_new_proposal:
+        st.subheader("➕ Wyślij Nową Wycenę")
+        render_new_proposal_form(supabase, negotiation_service, selected_project_id)
+        
     with tab_quotes:
-        st.subheader("📋 Nowe zadania do wyceny")
-        new_tasks_data = supabase.table("tasks").select("*").eq("project_id", selected_project_id).eq("commercial_status", "not_started").execute().data
-        if not new_tasks_data:
-            st.success("Wszystkie zadania wycenione!")
+        st.subheader("📤 Propozycje wysłane do Inwestora")
+        pending_inv_negs = [n for n in all_negs if n['status'] == 'pending']
+        if not pending_inv_negs:
+            st.success("Wszystkie Twoje propozycje zostały rozpatrzone!")
         else:
-            for t in new_tasks_data:
-                render_new_quote_card(t, negotiation_service)
+            for idx, neg in enumerate(pending_inv_negs):
+                render_crew_pending_card(neg, negotiation_service)
 
     with tab_counter:
         st.subheader("💬 Kontrpropozycje od Inwestora")
@@ -91,21 +100,73 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
 # KOMPONENTY
 # =====================================================
 
-def render_new_quote_card(task, negotiation_service):
+def render_new_proposal_form(supabase, negotiation_service, project_id):
+    """
+    Formularz do wysłania nowej propozycji ceny.
+    """
+    
+    # Pobierz zadania bez aktywnych negocjacji
+    all_tasks = supabase.table("tasks").select("id, name, phase_id, final_approved_price").eq(
+        "project_id", project_id
+    ).execute().data
+    
+    if not all_tasks:
+        st.warning("Brak zadań w tym projekcie")
+        return
+    
+    # Filtruj: pokaż tylko zadania bez zaakceptowanej ceny lub bez aktywnej negocjacji
+    available_tasks = []
+    for task in all_tasks:
+        if task.get('final_approved_price'):
+            continue
+            
+        active_neg = supabase.table("negotiations").select("id").eq(
+            "task_id", task['id']
+        ).in_("status", ["pending", "counter_offer"]).execute()
+        
+        if not active_neg.data:
+            available_tasks.append(task)
+            
+    if not available_tasks:
+        st.info("✅ Wszystkie zadania mają już ustalone ceny lub czekające propozycje!")
+        return
+        
+    st.markdown("### 📝 Formularz Wyceny")
+    
+    with st.form("new_proposal_form"):
+        task_options = {t['name']: t['id'] for t in available_tasks}
+        selected_task_name = st.selectbox("🔨 Wybierz zadanie", options=list(task_options.keys()))
+        selected_task_id = task_options[selected_task_name]
+        
+        proposed_price = st.number_input("💰 Proponowana cena (zł)", min_value=0.0, step=100.0, value=1000.0)
+        proposed_duration = st.number_input("⏱️ Szacunkowy czas (dni)", min_value=1, step=1, value=5)
+        proposed_notes = st.text_area("📝 Notatki (opcjonalnie)", placeholder="np. Wliczone materiały, robocizna...")
+        
+        if st.form_submit_button("📤 Wyślij Wycenę", use_container_width=True):
+            success, message, neg_id = negotiation_service.propose_price(
+                task_id=selected_task_id,
+                proposed_by='crew',
+                price=proposed_price,
+                duration_days=int(proposed_duration),
+                notes=proposed_notes
+            )
+            if success:
+                st.success(message)
+                st.rerun()
+            else:
+                st.error(message)
+
+def render_crew_pending_card(neg, negotiation_service):
+    task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')
     with st.container(border=True):
-        st.markdown(f"### 📍 {task['name']}")
+        st.markdown(f"### ⏳ {task_name}")
         c1, c2, c3 = st.columns(3)
         with c1:
-            p = st.number_input("Cena (zł)", min_value=0.0, value=1000.0, key=f"p_new_{task['id']}")
+            st.metric("Twoja Cena", f"{neg['proposed_price']:,.0f} zł")
         with c2:
-            d = st.number_input("Dni", min_value=1, value=1, key=f"d_new_{task['id']}")
+            st.metric("Czas", f"{neg['proposed_duration_days']} dni")
         with c3:
-            n = st.text_input("Notatka", key=f"n_new_{task['id']}")
-            
-        if st.button("Wyślij wycenę", key=f"btn_new_{task['id']}", use_container_width=True):
-            success, msg, _ = negotiation_service.propose_price(task['id'], 'crew', p, int(d), n)
-            if success:
-                st.rerun()
+            st.caption("Czekam na Inwestora")
 
 def render_crew_counter_card(neg, negotiation_service, key_suffix=""):
     neg_id = neg['id']
