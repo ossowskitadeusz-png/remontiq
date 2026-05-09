@@ -1127,15 +1127,31 @@ def render_activity_banner(role):
 # WIDOK EKIPY BUDOWLANEJ
 # ==========================================
 if st.session_state["role"] == "crew":
+    # Próba pobrania projektu (z fallbackiem)
     project_meta = get_project_metadata()
+    
+    if not project_meta:
+        # Próba ratunkowa - może projekt jest w tabeli project_charter?
+        try:
+            res_c = supabase.table("project_charter").select("*").limit(1).execute()
+            if res_c.data:
+                project_meta = res_c.data[0]
+                # Mapujemy stare nazwy na nowe jeśli trzeba
+                if 'project_name' not in project_meta and 'name' in project_meta:
+                    project_meta['project_name'] = project_meta['name']
+        except: pass
+
     if project_meta:
+        # Kluczowa poprawka: Upewnij się, że project_id to 'id' z bazy
+        p_id = project_meta.get('id') or project_meta.get('project_id')
         render_crew_dashboard(
-            project_id=project_meta['id'],
+            project_id=p_id,
             crew_member_id="KAROL_ID",
             crew_name="Karol"
         )
     else:
-        st.error("⚠️ Brak aktywnego projektu. Skontaktuj się z Inwestorem.")
+        st.error("⚠️ Brak aktywnego projektu.")
+        st.info("💡 Inwestorze: Wejdź w '0. Charter Projektu' i kliknij 'Utwórz Charter', aby odblokować dashboard ekipy.")
     
     if st.sidebar.button("Wyloguj"): logout()
     st.stop()
