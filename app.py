@@ -1333,11 +1333,18 @@ if st.session_state['role'] == "crew":
     st.sidebar.divider()
     menu = st.sidebar.radio("👷 NAWIGACJA", [
         "🚀 Plan na dzisiaj",
-        "💰 Moje Zarobki",
         "🚨 Blokady i Materiały",
-        "💬 Czat Budowy",
-        "🚪 Wyloguj"
+        "💬 Czat Budowy"
     ])
+    
+    st.sidebar.divider()
+    if st.sidebar.button("💰 MOJE FINANSE", use_container_width=True):
+        st.session_state['crew_menu_active'] = "finanse"
+        st.rerun()
+    
+    if st.sidebar.button("🚪 Wyloguj", use_container_width=True):
+        logout()
+        st.rerun()
 else:
     menu = st.sidebar.radio("🏠 MENU INWESTORA", [
         "1. Dashboard (Centrum)",
@@ -1364,18 +1371,21 @@ if "Wyloguj" in menu:
 if st.session_state['role'] == "crew":
     p_id = project_meta.get('id') if project_meta else None
     
-    # Obsługa przycisku "Planowanie" z sidebaru
+    # Obsługa przycisków funkcyjnych
     if st.session_state.get('crew_menu_active') == "planowanie":
         st.title("📅 Planowanie Remontu")
         st.info("Karol, tu układasz harmonogram i fazy.")
-        with st.expander("➕ DODAJ NOWE ZADANIE", expanded=True):
-            with st.form("new_task_plan_form", clear_on_submit=True):
-                t_name = st.text_input("Nazwa zadania")
-                t_diff = st.select_slider("Trudność", options=["EASY", "MEDIUM", "HARD"], value="MEDIUM")
-                if st.form_submit_button("DODAJ"):
-                    st.success("Zadanie dodane")
+        if st.button("⬅️ Powrót"):
+            st.session_state['crew_menu_active'] = None
+            st.rerun()
+        st.stop()
         
-        if st.button("⬅️ Powrót do Zadania"):
+    if st.session_state.get('crew_menu_active') == "finanse":
+        st.title("💰 Moje Finanse")
+        earnings = calculate_weekly_bonus_v2(p_id, "KAROL_ID")
+        st.metric("Suma do wypłaty (Ten tydzień)", f"{earnings['base'] + earnings['bonus_amt']} PLN")
+        st.info("Tutaj znajdziesz historię Twoich rozliczeń i premii.")
+        if st.button("⬅️ Powrót"):
             st.session_state['crew_menu_active'] = None
             st.rerun()
         st.stop()
@@ -1397,10 +1407,6 @@ if st.session_state['role'] == "crew":
         
         render_crew_dashboard(p_id, "KAROL_ID", "Karol")
         
-    elif menu == "💰 Moje Zarobki":
-        st.title("💰 Moje Zarobki")
-        earnings = calculate_weekly_bonus_v2(p_id, "KAROL_ID")
-        st.metric("Suma do wypłaty (Tydzień)", f"{earnings['base'] + earnings['bonus_amt']} PLN")
     elif menu == "🚨 Blokady i Materiały":
         st.title("🚨 Zgłoś problem")
     elif menu == "💬 Czat Budowy":
