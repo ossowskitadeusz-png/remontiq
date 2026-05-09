@@ -1455,8 +1455,14 @@ if st.session_state['role'] == "crew":
             total_val = sum(rates.get(t['difficulty'], 100) * t['estimated_hours'] for t in tasks)
             done_val = sum(rates.get(t['difficulty'], 100) * t['estimated_hours'] for t in tasks if t['kanban_status'] == 'COMPLETED')
             
-            # Pobieramy sumę już wypłaconych/oczekujących (uproszczone z logów)
-            all_fin_logs = supabase.table("project_logs").select("*").eq("project_id", p_id).in_("type", ["payment_request", "FINANCIAL"]).execute().data or []
+            # Pobieramy sumę już wypłaconych/oczekujących (bezpieczne zapytanie)
+            try:
+                all_fin_logs = supabase.table("project_logs").select("*").in_("type", ["payment_request", "FINANCIAL"]).execute().data or []
+                # Filtrujemy projekt w Pythonie
+                all_fin_logs = [l for l in all_fin_logs if l.get('project_id') == p_id]
+            except:
+                all_fin_logs = []
+
             paid_pending_sum = 0
             for l in all_fin_logs:
                 try:
