@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-014"
+APP_VERSION = "sprint23-50-100-deploy-fix-015"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -2659,14 +2659,30 @@ elif menu == "negotiations":
 elif menu == "settings":
     st.title("⚙️ Ustawienia i Eksport")
     
-    st.subheader("🏠 Zarządzanie Pomieszczeniami")
+    st.subheader("🏠 Słownik Pomieszczeń Projektu")
+    st.write("Wpisz tu pokoje, z których Karol będzie mógł budować swój harmonogram.")
+    
+    with st.form("add_room_form", clear_on_submit=True):
+        col1, col2 = st.columns([3, 1])
+        new_room_name = col1.text_input("Nazwa nowego pomieszczenia (np. Sypialnia, Łazienka)")
+        if col2.form_submit_button("➕ Dodaj do słownika", use_container_width=True):
+            if new_room_name:
+                supabase.table("rooms").insert({"name": new_room_name}).execute()
+                st.success(f"Dodano pokój: {new_room_name}")
+                st.rerun()
+            else:
+                st.error("Podaj nazwę pokoju.")
+                
+    st.write("### Edycja istniejących pomieszczeń")
     df_r = read_table("rooms")
     if not df_r.empty:
         edited_r = st.data_editor(df_r[['id', 'name']], disabled=["id"], hide_index=True, width="stretch")
-        if st.button("Zapisz zmiany w nazwach"):
+        if st.button("💾 Zapisz zmiany w nazwach", type="primary"):
             for _, row in edited_r.iterrows():
                 supabase.table("rooms").update({"name": row['name']}).eq("id", row['id']).execute()
             st.rerun()
+    else:
+        st.info("Słownik jest pusty. Dodaj pierwszy pokój powyżej.")
             
     st.divider()
     st.subheader("📊 Eksport Danych Księgowych")
