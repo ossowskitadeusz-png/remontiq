@@ -11,7 +11,7 @@ from services.phase_service import PhaseService
 from services.change_service import ChangeService
 from supabase import create_client
 
-def render_investor_panel(supabase=None, phase_service=None, negotiation_service=None, change_service=None):
+def render_investor_panel(supabase=None, phase_service=None, negotiation_service=None, change_service=None, task_service=None, timeline_service=None, ordering_service=None):
     """
     Premium Panel Inwestora - Zarządzanie negocjacjami, zmianami, timeline'em.
     """
@@ -33,6 +33,15 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
         phase_service = PhaseService()
     if not change_service:
         change_service = ChangeService()
+    if not task_service:
+        from services.task_service import TaskService
+        task_service = TaskService(supabase)
+    if not timeline_service:
+        from services.timeline_service import TimelineService
+        timeline_service = TimelineService(supabase, task_service, negotiation_service)
+    if not ordering_service:
+        from services.ordering_service import OrderingService
+        ordering_service = OrderingService(supabase, task_service)
     
     # 1. WYBÓR PROJEKTU
     projects = supabase.table("project_metadata").select("id, project_name").execute().data
@@ -74,7 +83,12 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     st.markdown("---")
     
     # 3. TABY
-    tab_negotiations, tab_changes, tab_budget = st.tabs(["💰 Negocjacje Cen", "📝 Wnioski o Zmiany", "📊 Analiza Budżetu"])
+    tab_negotiations, tab_changes, tab_budget, tab_timeline = st.tabs([
+        "💰 Negocjacje Cen", 
+        "📝 Wnioski o Zmiany", 
+        "📊 Analiza Budżetu",
+        "🕒 Oś Czasu Projektu"
+    ])
     
     with tab_negotiations:
         st.subheader("💰 Negocjacje Cen - Handshake")
@@ -115,6 +129,11 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
         st.write(f"Wydano {spent:,.0f} zł z {total_budget:,.0f} zł")
         if total_budget > 0:
             st.progress(min(spent / total_budget, 1.0))
+
+    with tab_timeline:
+        from components.timeline_widget import render_timeline_widget
+        st.subheader("🕒 Oś Czasu Projektu")
+        render_timeline_widget(timeline_service, selected_project_id)
 
 # =====================================================
 # KOMPONENTY

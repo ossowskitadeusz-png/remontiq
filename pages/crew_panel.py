@@ -10,7 +10,7 @@ from services.negotiation_service import NegotiationService
 from services.phase_service import PhaseService
 from supabase import create_client
 
-def render_crew_panel(supabase=None, phase_service=None, negotiation_service=None, change_service=None):
+def render_crew_panel(supabase=None, phase_service=None, negotiation_service=None, change_service=None, task_service=None, ordering_service=None):
     """
     Premium Panel Karola - Zarządzanie pracami, wycenami i negocjacjami.
     """
@@ -31,6 +31,12 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
         negotiation_service = NegotiationService(supabase)
     if not phase_service:
         phase_service = PhaseService()
+    if not task_service:
+        from services.task_service import TaskService
+        task_service = TaskService(supabase)
+    if not ordering_service:
+        from services.ordering_service import OrderingService
+        ordering_service = OrderingService(supabase, task_service)
     
     # 1. WYBÓR PROJEKTU
     projects_res = supabase.table("project_metadata").select("id, project_name").execute()
@@ -74,11 +80,11 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     ])
     
     with tab_planning:
-        render_crew_planning_module(supabase, phase_service, selected_project_id)
+        render_crew_planning_module(task_service, ordering_service, selected_project_id, phase_service)
     
     with tab_new_proposal:
         st.subheader("➕ Wyślij Nową Wycenę")
-        render_new_proposal_form(supabase, negotiation_service, phase_service, selected_project_id)
+        render_new_proposal_form(supabase, negotiation_service, phase_service, project_id, task_service)
         
     with tab_quotes:
         st.subheader("📤 Propozycje wysłane do Inwestora")
@@ -110,7 +116,7 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
 # KOMPONENTY
 # =====================================================
 
-def render_new_proposal_form(supabase, negotiation_service, phase_service, project_id):
+def render_new_proposal_form(supabase, negotiation_service, phase_service, project_id, task_service=None):
     """
     Formularz do wysłania nowej propozycji ceny - pozwala na tworzenie NOWYCH robót.
     """
@@ -150,24 +156,17 @@ def render_new_proposal_form(supabase, negotiation_service, phase_service, proje
                     # Wstrzykujemy ukryty tag, jeśli to ryczałt
                     final_desc = f"{t_desc}\n[LUMP_SUM_ROOM]" if is_lump_sum else t_desc
                     
-                    # 1. Tworzymy nowe ZADANIE (Task) w bazie
-                    u_id = st.session_state.get('user_id')
-                    task_payload = {
-                        "project_id": project_id,
-                        "phase_id": selected_phase_id,
-                        "name": t_name,
-                        "description": final_desc,
-                        "kanban_status": "BACKLOG",
-                        "commercial_status": "not_started",
-                        "execution_status": "NOT_READY"
-                    }
-                    if u_id:
-                        task_payload["created_by"] = u_id
-                        
-                    task_res = supabase.table("tasks").insert(task_payload).execute()
+                    # 1. Tworzymy nowe ZADANIE (Task) korzystając z Serwisu
+                    # Automatycznie dostanie stempel Handshake i statusy
+                    new_task = task_service.create_task(
+                        project_id=project_id,
+                        phase_id=selected_phase_id,
+                        name=t_name,
+                        description=final_desc
+                    )
                     
-                    if task_res.data:
-                        new_task_id = task_res.data[0]['id']
+                    if new_task:
+                        new_task_id = new_task['id']
                         
                         # 2. Odpalamy Handshake 2.0 dla nowego zadania
                         success, message, neg_id = negotiation_service.propose_price(
@@ -238,72 +237,119 @@ def render_crew_counter_card(neg, negotiation_service, key_suffix=""):
                     st.session_state[f"show_crew_form_{neg_id}"] = False
                     st.rerun()
 
-def render_crew_planning_module(supabase, phase_service, project_id):
+def render_crew_planning_module(task_service, ordering_service, project_id, phase_service):
     """
-    Moduł zarządzania Pomieszczeniami i podglądu struktury projektu.
+    Panel planowania Karola z możliwością zmiany kolejności zadań.
     """
-    # Formularz dodawania nowego Pomieszczenia (korzysta z bazy phases)
-    with st.expander("➕ Wybierz Pomieszczenie do swojego Planu (Tylko zdefiniowane przez Inwestora)"):
+    supabase = task_service.supabase
+    
+    # Formularz dodawania nowego Pomieszczenia
+    with st.expander("🏠 Dodaj Pomieszczenie do swojego Planu"):
         with st.form("form_add_room", clear_on_submit=True):
-            # Zaciągnij dostępne pokoje z bazy (tabela 'rooms')
             try:
-                available_rooms_req = supabase.table("rooms").select("*").execute()
+                available_rooms_req = supabase.table("rooms").select("*").eq("project_id", project_id).execute()
                 available_rooms = available_rooms_req.data or []
             except:
                 available_rooms = []
             
             if not available_rooms:
-                st.warning("Inwestor nie zdefiniował jeszcze żadnych pomieszczeń w słowniku projektu.")
-                p_name = None
-                st.form_submit_button("Dodaj pomieszczenie", type="primary", disabled=True)
+                st.warning("Inwestor nie zdefiniował jeszcze żadnych pomieszczeń.")
+                st.form_submit_button("Dodaj", disabled=True)
             else:
                 room_names = [r.get("name", "Nieznane") for r in available_rooms]
                 p_name = st.selectbox("Wybierz pomieszczenie z listy Inwestora *", options=room_names)
                 
-                if st.form_submit_button("Dodaj do swojego Planu", type="primary"):
-                    if p_name:
-                        u_id = st.session_state.get('user_id')
-                        res = phase_service.create_phase(project_id, p_name)
-                        if res.get("success"):
-                            st.success(f"Pomieszczenie '{p_name}' zostało dodane do Twojego planu!")
-                            st.rerun()
-                        else:
-                            st.error(f"Błąd bazy danych: {res.get('error')}")
+                if st.form_submit_button("Dodaj do Planu", type="primary"):
+                    res = phase_service.create_phase(project_id, p_name)
+                    if res.get("success"):
+                        st.success(f"Pomieszczenie '{p_name}' dodane!")
+                        st.rerun()
+                    else:
+                        st.error(f"Błąd: {res.get('error')}")
     
     st.markdown("---")
     
     phases = phase_service.get_phases(project_id)
     if not phases:
-        st.info("Brak zdefiniowanych pomieszczeń. Dodaj pierwsze pomieszczenie, by zacząć budować strukturę prac.")
+        st.info("Brak pomieszczeń w planie.")
         return
         
     for p in phases:
+        phase_id = p['id']
         with st.container(border=True):
+            # Pobierz posortowane zadania przez OrderingService
+            ordered_tasks = ordering_service.get_ordered_tasks(phase_id)
             
-            # Pobieramy zadania dla tego pomieszczenia
-            tasks = supabase.table("tasks").select("*").eq("phase_id", p['id']).execute().data
+            # Sprawdzamy ryczałt
+            is_lump_sum_room = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in ordered_tasks)
             
-            # Sprawdzamy czy pomieszczenie jest na ryczałcie
-            is_lump_sum_room = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in (tasks or []))
+            col_room, col_del = st.columns([5, 1])
+            with col_room:
+                title_suffix = " 🔒 `RYCZAŁT`" if is_lump_sum_room else ""
+                st.markdown(f"### 📦 {p['phase_name']}{title_suffix}")
+                if is_lump_sum_room:
+                    st.warning("Pomieszczenie zablokowane dla nowych zadań.")
             
-            if is_lump_sum_room:
-                st.markdown(f"### 📦 {p['phase_name']} 🔒 `RYCZAŁT`")
-                st.warning("Pomieszczenie zablokowane dla nowych zadań – rozliczane jako ryczałt.")
+            with col_del:
+                if not ordered_tasks:
+                    if st.button("🗑️", key=f"del_room_{phase_id}", help="Usuń puste pomieszczenie"):
+                        phase_service.delete_phase(phase_id)
+                        st.rerun()
+
+            if ordered_tasks:
+                for idx, task in enumerate(ordered_tasks):
+                    # Nowy układ kolumn z przyciskami ruchu
+                    col_num, col_info, col_move, col_price = st.columns([0.5, 3, 1, 1.5])
+                    
+                    with col_num:
+                        st.markdown(f"<div style='padding-top:10px; opacity:0.5;'>#{idx+1}</div>", unsafe_allow_html=True)
+                    
+                    with col_info:
+                        st.write(f"**{task['name']}**")
+                        # Badge statusu
+                        status = task['status'] # READY, PENDING, BLOCKED
+                        if status == 'READY':
+                            st.caption("🟢 **Gotowe do realizacji**")
+                        elif status == 'PENDING':
+                            st.caption("⚪ **Szkic / Do wyceny**")
+                        elif status == 'BLOCKED':
+                            st.caption("⏸️ **Czeka na poprzednie zadanie**")
+                    
+                    with col_move:
+                        m1, m2 = st.columns(2)
+                        with m1:
+                            if st.button("⬆️", key=f"up_{task['id']}", disabled=(idx==0)):
+                                ordering_service.move_task_up(task['id'])
+                                st.rerun()
+                        with m2:
+                            if st.button("⬇️", key=f"down_{task['id']}", disabled=(idx==len(ordered_tasks)-1)):
+                                ordering_service.move_task_down(task['id'])
+                                st.rerun()
+                    
+                    with col_price:
+                        if task['final_price']:
+                            st.markdown(f"<div style='text-align:right; color:#10b981; font-weight:700;'>{task['final_price']:,.0f} zł</div>", unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"<div style='text-align:right; opacity:0.5;'>brak ceny</div>", unsafe_allow_html=True)
             else:
-                st.markdown(f"### 📦 {p['phase_name']}")
-            
-            if tasks:
-                for t in tasks:
-                    # Logika wyświetlania statusu finansowego
-                    status_badge = "❌ Do wyceny"
-                    if t.get("final_approved_price"):
-                        status_badge = f"✅ Zaakceptowana ({t['final_approved_price']:,.0f} zł)"
-                    elif t.get("commercial_status") in ["in_negotiation"]:
-                        status_badge = "⏳ W negocjacjach"
-                        
-                    st.markdown(f"- **{t['name']}** — {status_badge}")
-            else:
-                st.caption("Brak zadań w tej fazie. Przejdź do 'Wyślij Nową Wycenę', by je utworzyć i od od razu podać cenę.")
+                st.caption("Brak zadań. Dodaj pierwsze zadanie w tym pokoju.")
+
+            # Przycisk dodania nowego zadania (tylko jeśli nie ryczałt)
+            if not is_lump_sum_room:
+                st.divider()
+                with st.expander("➕ Dodaj zadanie do tego pokoju"):
+                    with st.form(key=f"fast_add_task_{phase_id}"):
+                        new_t_name = st.text_input("Nazwa zadania")
+                        new_t_dur = st.number_input("Szacowane dni", min_value=1, value=1)
+                        if st.form_submit_button("Dodaj zadanie", use_container_width=True):
+                            if new_t_name:
+                                task_service.create_task(
+                                    project_id=project_id,
+                                    phase_id=phase_id,
+                                    name=new_t_name,
+                                    estimated_duration_days=new_t_dur
+                                )
+                                st.rerun()
 
 def render_crew_accepted_card(neg, key_suffix=""):
     task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')

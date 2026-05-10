@@ -22,11 +22,11 @@ class NegotiationService:
     4. Historia zapisywana w negotiation_history (audit trail)
     """
     
-    def __init__(self, supabase_client=None):
+    def __init__(self, supabase_client=None, task_service=None):
         """
         Inicjalizacja połączenia z Supabase.
-        Akceptuje opcjonalny istniejący klient lub tworzy nowy.
         """
+        self.task_service = task_service
         if supabase_client:
             self.supabase = supabase_client
         else:
@@ -152,13 +152,21 @@ class NegotiationService:
                 details={'notes': investor_notes}
             )
             
-            # 4. Zaktualizuj task z ostateczną ceną
-            self.supabase.table('tasks').update({
-                'final_approved_price': neg_data['proposed_price'],
-                'final_approved_duration_days': neg_data['proposed_duration_days'],
-                'commercial_status': 'approved',
-                'updated_at': datetime.now().isoformat()
-            }).eq('id', neg_data['task_id']).execute()
+            # 4. Zaktualizuj task korzystając z dedykowanego serwisu zadań (Single Source of Truth)
+            if self.task_service:
+                self.task_service.sync_handshake_status(
+                    task_id=neg_data['task_id'],
+                    commercial_status="ACCEPTED_LOCKED",
+                    price=neg_data['proposed_price'],
+                    comment="Zaakceptowano ofertę"
+                )
+            else:
+                # Fallback
+                self.supabase.table('tasks').update({
+                    'commercial_status': 'approved',
+                    'kanban_status': 'TODO',
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', neg_data['task_id']).execute()
             
             return True, "✅ Propozycja zaakceptowana!"
         
@@ -309,13 +317,21 @@ class NegotiationService:
                 details={'notes': crew_notes}
             )
             
-            # 4. Zaktualizuj task z CENĄ Z KONTROFERTY
-            self.supabase.table('tasks').update({
-                'final_approved_price': neg_data['response_price'],
-                'final_approved_duration_days': neg_data['response_duration_days'],
-                'commercial_status': 'approved',
-                'updated_at': datetime.now().isoformat()
-            }).eq('id', neg_data['task_id']).execute()
+            # 4. Zaktualizuj task korzystając z dedykowanego serwisu zadań (Single Source of Truth)
+            if self.task_service:
+                self.task_service.sync_handshake_status(
+                    task_id=neg_data['task_id'],
+                    commercial_status="ACCEPTED_LOCKED",
+                    price=neg_data['response_price'],
+                    comment="Akceptacja kontroferty przez ekipę"
+                )
+            else:
+                # Fallback jeśli serwis nie został wstrzyknięty (dla kompatybilności)
+                self.supabase.table('tasks').update({
+                    'commercial_status': 'approved',
+                    'kanban_status': 'TODO',
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', neg_data['task_id']).execute()
             
             return True, "✅ Kontrpropozycja zaakceptowana!"
         

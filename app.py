@@ -127,12 +127,41 @@ except Exception as e:
 
 from services.phase_service import PhaseService
 from services.negotiation_service import NegotiationService
+from services.task_service import TaskService
 from services.change_service import ChangeService
+from services.timeline_service import TimelineService
+from services.ordering_service import OrderingService
 
-# Inicjalizacja serwisów
-phase_service = PhaseService(supabase)
-negotiation_service = NegotiationService(supabase)
-change_service = ChangeService(supabase)
+# Inicjalizacja serwisów w session_state (Sprint 24)
+if "task_service" not in st.session_state:
+    st.session_state.task_service = TaskService(supabase)
+
+if "ordering_service" not in st.session_state:
+    st.session_state.ordering_service = OrderingService(supabase, st.session_state.task_service)
+
+if "negotiation_service" not in st.session_state:
+    st.session_state.negotiation_service = NegotiationService(supabase, task_service=st.session_state.task_service)
+
+if "phase_service" not in st.session_state:
+    st.session_state.phase_service = PhaseService(supabase)
+
+if "timeline_service" not in st.session_state:
+    st.session_state.timeline_service = TimelineService(
+        supabase, 
+        task_service=st.session_state.task_service, 
+        negotiation_service=st.session_state.negotiation_service
+    )
+
+if "change_service" not in st.session_state:
+    st.session_state.change_service = ChangeService(supabase)
+
+# Aliasy dla wygody (opcjonalne, ale ułatwiają czytelność niżej)
+task_service = st.session_state.task_service
+ordering_service = st.session_state.ordering_service
+negotiation_service = st.session_state.negotiation_service
+phase_service = st.session_state.phase_service
+timeline_service = st.session_state.timeline_service
+change_service = st.session_state.change_service
 
 # Importy nowych paneli (Sprint 24)
 from pages.crew_panel import render_crew_panel
@@ -383,166 +412,6 @@ def calculate_weekly_bonus_v2(project_id: str, crew_member_id: str):
     except:
         return {"base": 2000.0, "quality": 0.0, "bonus_pct": 0.0, "bonus_amt": 0.0}
 
-def render_crew_dashboard(project_id: str, crew_member_id: str, crew_name: str = "Karol"):
-    # 1️⃣ HEADER
-    st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 25px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 25px;">
-        <h1 style="color: white; margin: 0; font-size: 28px;">Dzień dobry, {crew_name}! 👋</h1>
-        <p style="color: #94a3b8; margin: 5px 0 0 0;">Budowa: {datetime.now().strftime("%d.%m.%Y")}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    tab_today, tab_plan = st.tabs(["👷 DZIŚ", "📅 PLAN REMONTU"])
-
-    with tab_today:
-        earnings = calculate_weekly_bonus_v2(project_id, crew_member_id)
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.markdown(f"""
-            <div style="background: #ffffff; border-radius: 20px; padding: 25px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); color: #1e293b;">
-                <div style="font-size: 14px; font-weight: 700; color: #64748b; margin-bottom: 20px; text-transform: uppercase;">💰 TWOJA PENSJA</div>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 32px; font-weight: 900;">{earnings['base'] + earnings['bonus_amt']} <span style="font-size: 16px;">PLN</span></span>
-                    <span style="color: #22c55e; font-weight: bold;">+ {earnings['bonus_amt']} PLN Bonusu</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        with c2:
-            st.markdown(f"""
-            <div style="background: #3b82f6; border-radius: 20px; padding: 25px; height: 100%; color: white; text-align: center;">
-                <div style="font-size: 24px; font-weight: 900;">+{earnings['bonus_pct']}%</div>
-                <div style="font-size: 10px; opacity: 0.8;">JAKOŚĆ PRACY</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.subheader("📋 Zadania na dziś")
-        tasks = supabase.table("tasks").select("*").eq("project_id", project_id).neq("kanban_status", "DONE").execute().data or []
-        
-        if not tasks:
-            st.info("Brak zadań na liście. Przejdź do zakładki PLAN, aby dodać nowe zadania.")
-        else:
-            for t in tasks:
-                diff = t.get('difficulty', 'MEDIUM')
-                diff_clr = "#22c55e" if diff == "EASY" else "#f59e0b" if diff == "MEDIUM" else "#ef4444"
-                with st.container(border=True):
-                    tc1, tc2 = st.columns([3, 1])
-                    tc1.markdown(f"**{t.get('name') or t.get('task_name')}**")
-                    tc1.caption(f"{diff} | {t.get('phase_name', 'Ogólne')} | {t.get('estimated_hours', 0)}h")
-                    
-                    if t['kanban_status'] == "TODO":
-                        if tc2.button("▶️ START", key=f"s_{t['id']}", use_container_width=True):
-                            start_task_timer_v2(t['id'], crew_member_id)
-                            st.rerun()
-                    elif t['kanban_status'] == "IN_PROGRESS":
-                        if tc2.button("✅ KONIEC", key=f"d_{t['id']}", use_container_width=True, type="primary"):
-                            complete_task_v2(t['id'], crew_member_id)
-                            st.rerun()
-                        if tc2.button("⏸️ PAUZA", key=f"p_{t['id']}", use_container_width=True):
-                            stop_task_timer_v2(t['id'], crew_member_id)
-                            st.rerun()
-
-    with tab_plan:
-        st.markdown("### 🏗️ Plan Remontu 2.0")
-        st.write("Buduj strukturę projektu, dodawaj fazy i wyceniaj zadania.")
-        
-        # --- SEKCJA: DODAWANIE FAZY ---
-        with st.expander("➕ NOWA FAZA PROJEKTU", expanded=False):
-            with st.form("new_phase_form"):
-                p_name = st.text_input("Nazwa fazy (np. Elektryka - stan surowy)")
-                pc1, pc2 = st.columns(2)
-                p_start = pc1.date_input("Planowany start")
-                p_end = pc2.date_input("Planowany koniec", value=date.today() + timedelta(days=7))
-                p_budget = st.number_input("Budżet szacunkowy fazy (PLN)", min_value=0, value=5000)
-                
-                if st.form_submit_button("📁 UTWÓRZ FAZĘ", use_container_width=True):
-                    if p_name:
-                        # Pobierz liczbę faz aby ustalić numer
-                        current_phases = phase_service.get_phases(project_id)
-                        next_num = len(current_phases) + 1
-                        
-                        res = phase_service.create_phase(
-                            project_id=project_id,
-                            phase_name=p_name,
-                            phase_number=next_num,
-                            planned_start_date=p_start.isoformat(),
-                            planned_end_date=p_end.isoformat(),
-                            estimated_budget=p_budget,
-                            created_by_crew_id=crew_member_id
-                        )
-                        if res["success"]:
-                            st.success(f"Utworzono fazę: {p_name}")
-                            st.rerun()
-                        else: st.error(f"Błąd: {res.get('error')}")
-                    else: st.error("Podaj nazwę fazy!")
-
-        # --- SEKCJA: DODAWANIE ZADANIA ---
-        phases = phase_service.get_phases(project_id)
-        if not phases:
-            st.warning("Najpierw utwórz chociaż jedną fazę powyżej, aby móc dodawać zadania.")
-        else:
-            with st.expander("➕ DODAJ ZADANIE DO FAZY", expanded=True):
-                with st.form("new_task_2_0"):
-                    t_name = st.text_input("Nazwa zadania")
-                    t_phase_obj = st.selectbox("Wybierz fazę", phases, format_func=lambda x: f"{x['phase_number']}. {x['phase_name']}")
-                    t_price = st.number_input("Twoja wycena (PLN)", min_value=0, value=500)
-                    t_hours = st.number_input("Ile godzin?", min_value=1, value=8)
-                    t_desc = st.text_area("Opis / Notatki")
-                    
-                    if st.form_submit_button("🚀 WYŚLIJ PROPOZYCJĘ DO INWESTORA", use_container_width=True):
-                        if t_name:
-                            new_task = {
-                                "project_id": project_id,
-                                "phase_id": t_phase_obj['id'],
-                                "phase_name": t_phase_obj['phase_name'],
-                                "name": t_name,
-                                "task_name": t_name,
-                                "description": t_desc,
-                                "crew_price": t_price,
-                                "estimated_hours": t_hours,
-                                "commercial_status": "PROPOSED_BY_CREW",
-                                "kanban_status": "TODO",
-                                "created_by_crew": True
-                            }
-                            supabase.table("tasks").insert(new_task).execute()
-                            st.success(f"Zadanie '{t_name}' wysłane do akceptacji!")
-                            st.rerun()
-                        else: st.error("Podaj nazwę zadania!")
-
-        st.markdown("---")
-        st.subheader("📋 Twoja Mapa Remontu")
-        
-        if not phases:
-            st.info("Brak faz. Zacznij od dodania nowej fazy.")
-        else:
-            all_tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
-            df_tasks = pd.DataFrame(all_tasks) if all_tasks else pd.DataFrame()
-            
-            for p in phases:
-                progress = phase_service.get_phase_progress(p['id'])
-                financial = phase_service.get_phase_financial_status(p['id'])
-                
-                with st.container(border=True):
-                    k1, k2, k3 = st.columns([2, 1, 1])
-                    k1.markdown(f"#### {p['phase_number']}. {p['phase_name']}")
-                    k2.metric("Postęp", f"{progress['progress_percent']}%")
-                    k3.metric("Est. Zarobek", f"{p['estimated_budget']} PLN")
-                    
-                    # Filtruj zadania dla tej fazy
-                    if not df_tasks.empty:
-                        phase_tasks = df_tasks[df_tasks['phase_id'] == p['id']]
-                        if not phase_tasks.empty:
-                            for _, t in phase_tasks.iterrows():
-                                status_icon = "⏳" if t['commercial_status'] == "PROPOSED_BY_CREW" else "✅" if t['commercial_status'] == "ACCEPTED_LOCKED" else "❌"
-                                st.write(f"{status_icon} **{t['name']}** | {t['crew_price']} PLN | `{t['commercial_status']}`")
-                        else:
-                            st.caption("Brak zadań w tej fazie.")
-
-    # 4️⃣ CENTRUM ZGŁOSZEŃ (Globalne)
-    with st.sidebar:
-        st.divider()
-        if st.button("🚪 Wyloguj"): logout()
-
 def get_project_days_info(project_meta):
     start = datetime.strptime(project_meta['planned_start_date'], "%Y-%m-%d").date()
     end = datetime.strptime(project_meta['planned_end_date'], "%Y-%m-%d").date()
@@ -556,76 +425,6 @@ def get_project_days_info(project_meta):
         "remaining_days": remaining_days, "progress_pct": progress_pct,
         "is_started": today >= start, "is_ended": today >= end
     }
-
-def get_tasks_with_dependencies():
-    try:
-        response = supabase.table("tasks_with_dependencies").select("*").order("planned_start_date").execute()
-        return response.data or []
-    except Exception:
-        return []
-
-def complete_task(task_id):
-    supabase.table("tasks").update({"status": "Done", "progress_percent": 100, "actual_end_date": datetime.now().isoformat()}).eq("id", task_id).execute()
-    return {"status": "ok"}
-
-def add_investor_note(task_id, note):
-    supabase.table("tasks").update({"investor_note": note}).eq("id", task_id).execute()
-    return {"status": "ok"}
-
-def create_task_by_crew(task_name, task_description, planned_start_date, planned_end_date, assigned_to, depends_on_tasks=None):
-    payload = {
-        "name": task_name, "description": task_description,
-        "planned_start_date": planned_start_date.isoformat(), "planned_end_date": planned_end_date.isoformat(),
-        "assigned_to": ", ".join(assigned_to), "status": "Backlog", "progress_percent": 0,
-        "created_by_crew": True, "depends_on_task_ids": depends_on_tasks or []
-    }
-    supabase.table("tasks").insert(payload).execute()
-    return {"status": "ok"}
-
-def can_task_start(task_id):
-    try:
-        task = supabase.table("tasks_with_dependencies").select("*").eq("id", task_id).execute()
-        if not task.data: return {"can_start": False, "reason": "Zadanie nie znalezione"}
-        
-        task_data = task.data[0]
-        if task_data.get("all_dependencies_met", False):
-            return {"can_start": True, "message": "✅ Wszystkie zależności spełnione"}
-        else:
-            blocking = supabase.table("tasks").select("id, name, status").contains("depends_on_task_ids", [task_id]).execute()
-            blocking_names = [t['name'] for t in (blocking.data or []) if t['status'] != 'Done']
-            return {"can_start": False, "reason": f"Czeka na: {', '.join(blocking_names) if blocking_names else 'Inne zadania'}", "blocking_tasks": blocking_names}
-    except Exception as e:
-        return {"can_start": False, "reason": str(e)}
-
-def get_kanban_board():
-    try:
-        response = supabase.table("tasks").select("*").order("task_priority").execute()
-        tasks = response.data or []
-        kanban = {'BACKLOG': [], 'READY': [], 'IN_PROGRESS': [], 'AWAITING_INSPECTION': [], 'COMPLETED': []}
-        for task in tasks:
-            status = task.get('kanban_status') or 'BACKLOG'
-            if status in kanban: kanban[status].append(task)
-        return kanban
-    except Exception:
-        return {'BACKLOG': [], 'READY': [], 'IN_PROGRESS': [], 'AWAITING_INSPECTION': [], 'COMPLETED': []}
-
-def update_kanban_status(task_id, new_status):
-    supabase.table("tasks").update({"kanban_status": new_status}).eq("id", task_id).execute()
-    return {"status": "ok"}
-
-def start_task(task_id):
-    task_name = (supabase.table("tasks").select("name").eq("id", task_id).execute().data or [{}])[0].get("name", "?")
-    supabase.table("tasks").update({"kanban_status": "IN_PROGRESS", "actual_start_date": datetime.now().isoformat()}).eq("id", task_id).execute()
-    log_activity("task_started", f"Karol rozpoczął: {task_name}", "Karol", "investor", task_id)
-    return {"status": "ok"}
-
-def submit_for_inspection(task_id, notes="", photos=None):
-    task_name = (supabase.table("tasks").select("name").eq("id", task_id).execute().data or [{}])[0].get("name", "?")
-    inspection_data = {"task_id": task_id, "submitted_by": "Karol", "submitted_at": datetime.now().isoformat(), "submission_notes": notes, "submission_photos": photos or [], "inspection_status": "PENDING"}
-    response = supabase.table("task_inspection").insert(inspection_data).execute()
-    supabase.table("tasks").update({"kanban_status": "AWAITING_INSPECTION"}).eq("id", task_id).execute()
-    log_activity("inspection_submitted", f"Karol zgłosił do odbioru: {task_name}", "Karol", "investor", task_id)
-    return {"status": "ok", "inspection_id": response.data[0]['id'] if response.data else None}
 
 def report_blocker(task_id, description, blocker_type="OTHER"):
     """Zapisuje powód, status przed blokadą i blokuje zadanie."""
@@ -1708,7 +1507,7 @@ if st.session_state['role'] == "crew":
     
     # Obsługa przycisków funkcyjnych
     if st.session_state.get('crew_menu_active') == "planowanie":
-        render_crew_panel(supabase, phase_service, negotiation_service, change_service)
+        render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
         if st.button("⬅️ Powrót do menu głównego", use_container_width=True):
             st.session_state['crew_menu_active'] = None
             st.rerun()
@@ -1852,7 +1651,7 @@ if st.session_state['role'] == "crew":
     # (Opcja 🏗️ Plan Remontu 2.0 została przeniesiona do głównego przycisku)
 
     elif menu == "🚀 Plan na dzisiaj":
-        render_crew_dashboard(p_id, "KAROL_ID", "Karol")
+        render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
         
     elif menu == "🚨 Blokady i Materiały":
         st.title("🚨 Zgłoś problem")
@@ -1864,18 +1663,25 @@ if st.session_state['role'] == "crew":
 render_activity_banner("investor")
 
 # Pomocnicza lista pokoi (Dla formularzy)
-df_rooms = read_table("rooms", select="id, name")
+p_meta_global = get_project_metadata()
+p_id_global = p_meta_global.get('id') if p_meta_global else None
+
+if p_id_global:
+    rooms_req = supabase.table("rooms").select("id, name").eq("project_id", p_id_global).execute()
+    df_rooms = pd.DataFrame(rooms_req.data) if rooms_req.data else pd.DataFrame()
+else:
+    df_rooms = pd.DataFrame(columns=["id", "name"])
 rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
 for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
 if menu == "investor_2_0":
-    render_investor_panel(supabase, phase_service, negotiation_service, change_service)
+    render_investor_panel(supabase, phase_service, negotiation_service, change_service, task_service, timeline_service, ordering_service)
 
 elif menu == "old_dashboard":
     p_meta = get_project_metadata()
     if p_meta:
-        render_crew_dashboard(p_meta['id'], "KAROL_ID", "Karol") # KAROL_ID jako placeholder
+        render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
     else:
         st.warning("Najpierw utwórz Charter Projektu.")
 
@@ -2206,20 +2012,32 @@ elif menu == "communication":
 elif menu == "start":
     st.title("🚀 Kreator Startowy (Cloud)")
     st.write("Bezpiecznie dodaj pokoje do projektu w chmurze.")
+    
+    p_meta = get_project_metadata()
+    p_id = p_meta.get('id') if p_meta else None
+    
     with st.form("kreator_form", clear_on_submit=True):
         pokoje_input = st.text_input("Jakie pomieszczenia remontujesz? (po przecinku)")
         if st.form_submit_button("Zapisz pomieszczenia"):
-            pokoje = [p.strip() for p in pokoje_input.split(",") if p.strip()]
-            for p in pokoje:
-                try: supabase.table("rooms").insert({"name": p}).execute()
-                except Exception: pass
-            st.success(f"Przetworzono {len(pokoje)} pomieszczeń.")
-            st.rerun()
-    df_r_view = read_table("rooms")
-    if not df_r_view.empty:
-        st.dataframe(df_r_view[['name', 'created_at']], hide_index=True)
+            if not p_id:
+                st.error("Brak aktywnego projektu. Nie można dodać pomieszczeń.")
+            else:
+                pokoje = [p.strip() for p in pokoje_input.split(",") if p.strip()]
+                for p in pokoje:
+                    try: supabase.table("rooms").insert({"name": p, "project_id": p_id}).execute()
+                    except Exception: pass
+                st.success(f"Przetworzono {len(pokoje)} pomieszczeń.")
+                st.rerun()
+                
+    if p_id:
+        r_req = supabase.table("rooms").select("name, created_at").eq("project_id", p_id).execute()
+        df_r_view = pd.DataFrame(r_req.data) if r_req.data else pd.DataFrame()
+        if not df_r_view.empty:
+            st.dataframe(df_r_view[['name', 'created_at']], hide_index=True)
+        else:
+            st.info("Brak wprowadzonych pomieszczeń.")
     else:
-        st.info("Brak wprowadzonych pomieszczeń.")
+        st.info("Wybierz projekt, by zobaczyć pomieszczenia.")
 
 elif menu == "budget":
     st.title("💰 Wydatki (Supabase Sync)")
@@ -2683,6 +2501,13 @@ elif menu == "negotiations":
 elif menu == "settings":
     st.title("⚙️ Ustawienia i Eksport")
     
+    p_meta = get_project_metadata()
+    p_id = p_meta.get('id') if p_meta else None
+    
+    if not p_id:
+        st.warning("⚠️ Brak wybranego projektu w sesji! Wybierz projekt, by konfigurować pokoje.")
+        st.stop()
+        
     st.subheader("🏠 Słownik Pomieszczeń Projektu")
     st.write("Wpisz tu pokoje, z których Karol będzie mógł budować swój harmonogram.")
     
@@ -2692,7 +2517,7 @@ elif menu == "settings":
         if col2.form_submit_button("➕ Dodaj do słownika", use_container_width=True):
             if new_room_name:
                 try:
-                    supabase.table("rooms").insert({"name": new_room_name}).execute()
+                    supabase.table("rooms").insert({"name": new_room_name, "project_id": p_id}).execute()
                     st.success(f"Dodano pokój: {new_room_name}")
                     st.rerun()
                 except Exception as e:
@@ -2704,7 +2529,11 @@ elif menu == "settings":
                 st.error("Podaj nazwę pokoju.")
                 
     st.write("### Edycja istniejących pomieszczeń")
-    df_r = read_table("rooms")
+    
+    # Bezpieczne pobranie tyko pokoi dla TEGO konkretnego projektu
+    rooms_data = supabase.table("rooms").select("*").eq("project_id", p_id).execute().data
+    df_r = pd.DataFrame(rooms_data) if rooms_data else pd.DataFrame()
+    
     if not df_r.empty:
         edited_r = st.data_editor(df_r[['id', 'name']], disabled=["id"], hide_index=True, width="stretch")
         if st.button("💾 Zapisz zmiany w nazwach", type="primary"):
