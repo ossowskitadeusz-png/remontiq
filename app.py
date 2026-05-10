@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-018"
+APP_VERSION = "sprint23-50-100-deploy-fix-019"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -2291,10 +2291,16 @@ elif menu == "tasks":
                             st.write(f"Status: **{status_label}**")
                         with col3:
                             price = t.get('final_approved_price') or 0
+                            h_data = parse_handshake_data(desc) if "------------------------" in desc else None
+                            proposed_price = h_data['price'] if h_data else 0
+                            
                             if price > 0:
-                                st.metric("Cena (PLN)", f"{price:,.2f}")
+                                st.metric("Cena (Zablokowana)", f"{price:,.2f} zł")
+                            elif proposed_price > 0:
+                                st.metric("Oferta (Niezatwierdzona)", f"{proposed_price:,.2f} zł")
+                                st.caption("Kieruj się do Centrum Dowodzenia")
                             else:
-                                st.caption("Cena nieustalona / W negocjacji")
+                                st.caption("Brak wyceny")
                     st.divider()
 
 elif menu == "inspections":
