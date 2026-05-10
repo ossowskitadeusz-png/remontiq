@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-010"
+APP_VERSION = "sprint23-50-100-deploy-fix-011"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -1649,7 +1649,6 @@ if st.session_state['role'] == "crew":
     
     st.sidebar.divider()
     menu = st.sidebar.radio("👷 NAWIGACJA", [
-        "🏗️ Plan Remontu 2.0",
         "🚀 Plan na dzisiaj",
         "🚨 Blokady i Materiały",
         "💬 Czat Budowy"
@@ -1717,9 +1716,8 @@ if st.session_state['role'] == "crew":
     
     # Obsługa przycisków funkcyjnych
     if st.session_state.get('crew_menu_active') == "planowanie":
-        st.title("📅 Planowanie Remontu")
-        st.info("Karol, tu układasz harmonogram i fazy.")
-        if st.button("⬅️ Powrót"):
+        render_crew_panel(supabase, phase_service, negotiation_service, change_service)
+        if st.button("⬅️ Powrót do menu głównego", use_container_width=True):
             st.session_state['crew_menu_active'] = None
             st.rerun()
         st.stop()
@@ -1859,8 +1857,7 @@ if st.session_state['role'] == "crew":
             st.rerun()
         st.stop()
 
-    if menu == "🏗️ Plan Remontu 2.0":
-        render_crew_panel(supabase, phase_service, negotiation_service, change_service)
+    # (Opcja 🏗️ Plan Remontu 2.0 została przeniesiona do głównego przycisku)
 
     elif menu == "🚀 Plan na dzisiaj":
         render_crew_dashboard(p_id, "KAROL_ID", "Karol")
