@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-017"
+APP_VERSION = "sprint23-50-100-deploy-fix-018"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -2248,45 +2248,54 @@ elif menu == "budget":
         st.info("Brak zarejestrowanych wydatków.")
 
 elif menu == "tasks":
-    st.title("📋 PLAN KAROLA — Twoje Zadania")
-    st.caption("Karol zaplanował pracę. Twoja rola: usunąć blokady i dodać uwagi.")
-    tasks = get_tasks_with_dependencies()
-
-    if not tasks:
-        st.info("📭 Karol jeszcze nie zaplanował żadnych zadań")
+    st.title("📋 PLAN REMONTU — Twój Harmonogram")
+    st.caption("Poniżej znajduje się struktura prac ułożona przez Karola, z podziałem na pokoje.")
+    
+    p_id = project_meta.get('id') if project_meta else None
+    if not p_id:
+        st.warning("Najpierw utwórz Charter Projektu, aby Karol miał gdzie pracować.")
+        st.stop()
+        
+    phases = phase_service.get_phases(p_id)
+    if not phases:
+        st.info("📭 Karol nie dodał jeszcze żadnych pomieszczeń do swojego planu. Upewnij się, że ma je do wyboru w Twoim słowniku.")
     else:
-        for task in tasks:
-            task_id = task['id']
+        for p in phases:
             with st.container(border=True):
-                col1, col2, col3 = st.columns([2, 1, 1])
-                with col1:
-                    st.markdown(f"### {task['name']}")
-                with col2:
-                    st.write(f"**{task['status']}**")
-                with col3:
-                    st.metric("Postęp", f"{task.get('progress_percent', 0)}%")
+                # Pobieramy zadania dla danego pokoju
+                room_tasks = supabase.table("tasks").select("*").eq("phase_id", p['id']).execute().data or []
                 
-                c1, c2 = st.columns(2)
-                c1.write(f"**Zespół:** {task.get('assigned_to', '—')}")
-                c1.write(f"**Okres:** {task['planned_start_date']} - {task['planned_end_date']}")
-                if task.get('description'): c2.write(f"**Instrukcja:** {task['description']}")
+                # Detekcja ryczałtu całkowitego na pomieszczenie
+                is_lump_sum_room = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in room_tasks)
                 
-                if not task.get('all_dependencies_met', True):
-                    st.error(f"⛔ Zablokowane. Zależy od innych zadań.")
-                
-                st.write("**🟨 Twoja notatka (widoczna dla Karola):**")
-                current_note = task.get('investor_note') or ""
-                new_note = st.text_area("Dodaj notatkę", value=current_note, key=f"note_{task_id}", label_visibility="collapsed")
-                
-                if st.button("💾 Zapisz notatkę", key=f"save_note_{task_id}"):
-                    add_investor_note(task_id, new_note)
-                    st.success("Zapisano notatkę!")
-                    st.rerun()
-                
-                if task['status'] != 'Done' and st.button("✅ Oznacz jako UKOŃCZONE", key=f"complete_{task_id}"):
-                    complete_task(task_id)
-                    st.success("Zadanie ukończone!")
-                    st.rerun()
+                if is_lump_sum_room:
+                    st.markdown(f"### 📦 Pokój: {p['phase_name']} 🔒 `RYCZAŁT CAŁKOWITY`")
+                else:
+                    st.markdown(f"### 🚪 Pokój: {p['phase_name']}")
+                    
+                if not room_tasks:
+                    st.caption("Karol nie przypisał tu jeszcze żadnej wyceny ani zadania.")
+                else:
+                    for t in room_tasks:
+                        desc = t.get('description') or ''
+                        # Czyścimy wizualnie tagi i handshake
+                        clean_desc = desc.split("------------------------")[0].strip() if "------------------------" in desc else desc
+                        clean_desc = clean_desc.replace("[LUMP_SUM_ROOM]", "").strip()
+                        
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        with col1:
+                            st.markdown(f"**{t.get('name', 'Brak nazwy')}**")
+                            if clean_desc: st.caption(clean_desc)
+                        with col2:
+                            status_label = t.get('kanban_status') or t.get('status', 'Nieznany')
+                            st.write(f"Status: **{status_label}**")
+                        with col3:
+                            price = t.get('final_approved_price') or 0
+                            if price > 0:
+                                st.metric("Cena (PLN)", f"{price:,.2f}")
+                            else:
+                                st.caption("Cena nieustalona / W negocjacji")
+                    st.divider()
 
 elif menu == "inspections":
     st.title("🔔 ODBIÓR PRAC")
