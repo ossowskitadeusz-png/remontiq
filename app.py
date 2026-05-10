@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-016"
+APP_VERSION = "sprint23-50-100-deploy-fix-017"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -2660,9 +2660,15 @@ elif menu == "settings":
         new_room_name = col1.text_input("Nazwa nowego pomieszczenia (np. Sypialnia, Łazienka)")
         if col2.form_submit_button("➕ Dodaj do słownika", use_container_width=True):
             if new_room_name:
-                supabase.table("rooms").insert({"name": new_room_name}).execute()
-                st.success(f"Dodano pokój: {new_room_name}")
-                st.rerun()
+                try:
+                    supabase.table("rooms").insert({"name": new_room_name}).execute()
+                    st.success(f"Dodano pokój: {new_room_name}")
+                    st.rerun()
+                except Exception as e:
+                    if "duplicate key value" in str(e).lower() or "unique constraint" in str(e).lower() or "PGRST116" in str(e) or "23505" in str(e):
+                        st.warning(f"⚠️ Pokój '{new_room_name}' już znajduje się w słowniku!")
+                    else:
+                        st.error(f"Nie udało się dodać pokoju. Błąd: {str(e)}")
             else:
                 st.error("Podaj nazwę pokoju.")
                 
