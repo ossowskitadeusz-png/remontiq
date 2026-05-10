@@ -248,9 +248,13 @@ def render_crew_planning_module(supabase, phase_service, project_id):
             p_name = st.text_input("Nazwa pomieszczenia *")
             if st.form_submit_button("Dodaj pomieszczenie", type="primary"):
                 if p_name:
-                    phase_service.create_phase(project_id, p_name)
-                    st.success("Pomieszczenie zostało dodane!")
-                    st.rerun()
+                    u_id = st.session_state.get('user_id')
+                    res = phase_service.create_phase(project_id, p_name, created_by_crew_id=u_id)
+                    if res.get("success"):
+                        st.success("Pomieszczenie zostało dodane!")
+                        st.rerun()
+                    else:
+                        st.error(f"Błąd bazy danych: {res.get('error')}")
                 else:
                     st.error("Podaj nazwę pomieszczenia.")
     

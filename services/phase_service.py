@@ -73,7 +73,6 @@ class PhaseService:
                 "status": "PLANNING",
                 "estimated_budget": estimated_budget,
                 "actual_spent": 0.0,
-                "created_by_crew_id": created_by_crew_id or "SYSTEM",
                 "depends_on_phase_ids": json.dumps(depends_on_phase_ids),
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat()
