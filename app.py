@@ -7,7 +7,7 @@ from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
 
-APP_VERSION = "sprint23-50-100-deploy-fix-015"
+APP_VERSION = "sprint23-50-100-deploy-fix-016"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -1663,20 +1663,13 @@ if st.session_state['role'] == "crew":
         logout()
         st.rerun()
 else:
-    # Definicja stron Inwestora (Klucz techniczny : Etykieta widoczna)
+    # Definicja stron Inwestora - ODCHUDZONE MENU (Wersja Minimalistyczna)
     INVESTOR_PAGES = {
-        "investor_2_0": "⭐ 1. CENTRUM DOWODZENIA 2.0",
-        "old_dashboard": "🏠 2. Dashboard (Widok klasyczny)",
-        "tasks": "📋 3. Plan Remontu (Zadania)",
-        "crew_view": "👷 4. Widok Ekipy",
-        "schedule": "📅 5. Harmonogram",
-        "budget": "💰 6. Budżet i Wydatki",
-        "crews": "👥 7. Ekipy i Wykonawcy",
-        "journal": "📒 8. Dziennik Projektu",
-        "settlements": "📈 9. Wyceny i Rozliczenia",
-        "negotiations": "🤝 10. Negocjacje i Handshake",
-        "settings": "⚙️ 11. Ustawienia Projektu",
-        "charter": "🏗️ 0. Charter Projektu",
+        "investor_2_0": "⭐ Centrum Dowodzenia",
+        "tasks": "📋 Plan Remontu",
+        "budget": "💰 Budżet i Finanse",
+        "settings": "⚙️ Słownik i Ustawienia",
+        "charter": "🏗️ Charter Projektu",
         "logout": "🚪 Wyloguj"
     }
     
