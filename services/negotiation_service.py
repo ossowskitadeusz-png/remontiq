@@ -478,7 +478,8 @@ class NegotiationService:
             
             results = []
             for neg in response.data:
-                if neg['tasks'] and neg['tasks'].get('project_id') == project_id:
+                linked_task = neg.get("tasks") or {}
+                if linked_task.get("project_id") == project_id:
                     results.append(neg)
             
             return results
