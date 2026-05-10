@@ -2260,10 +2260,27 @@ elif menu == "tasks":
     if not phases:
         st.info("📭 Karol nie dodał jeszcze żadnych pomieszczeń do swojego planu. Upewnij się, że ma je do wyboru w Twoim słowniku.")
     else:
+        # POBIERANIE WSZYSTKICH ZADAŃ RAZ (Rozwiązanie N+1)
+        phase_ids = [p.get("id") for p in phases if p.get("id")]
+        all_tasks = []
+        if phase_ids:
+            try:
+                all_tasks_req = supabase.table("tasks").select("*").in_("phase_id", phase_ids).execute()
+                all_tasks = all_tasks_req.data or []
+            except Exception:
+                all_tasks = []
+            
+        # Grupowanie w Pythonie po phase_id
+        tasks_by_phase_id = {}
+        for t in all_tasks:
+            pid = t.get("phase_id")
+            if pid:
+                tasks_by_phase_id.setdefault(pid, []).append(t)
+
         for p in phases:
             with st.container(border=True):
-                # Pobieramy zadania dla danego pokoju
-                room_tasks = supabase.table("tasks").select("*").eq("phase_id", p['id']).execute().data or []
+                # Pobieramy zadania dla danego pokoju ze słownika w pamięci
+                room_tasks = tasks_by_phase_id.get(p.get("id"), [])
                 
                 # Detekcja ryczałtu całkowitego na pomieszczenie
                 is_lump_sum_room = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in room_tasks)
