@@ -243,20 +243,32 @@ def render_crew_planning_module(supabase, phase_service, project_id):
     Moduł zarządzania Pomieszczeniami i podglądu struktury projektu.
     """
     # Formularz dodawania nowego Pomieszczenia (korzysta z bazy phases)
-    with st.expander("➕ Utwórz Nowe Pomieszczenie (np. Łazienka Gościnna)"):
-        with st.form("form_add_phase", clear_on_submit=True):
-            p_name = st.text_input("Nazwa pomieszczenia *")
-            if st.form_submit_button("Dodaj pomieszczenie", type="primary"):
-                if p_name:
-                    u_id = st.session_state.get('user_id')
-                    res = phase_service.create_phase(project_id, p_name, created_by_crew_id=u_id)
-                    if res.get("success"):
-                        st.success("Pomieszczenie zostało dodane!")
-                        st.rerun()
-                    else:
-                        st.error(f"Błąd bazy danych: {res.get('error')}")
-                else:
-                    st.error("Podaj nazwę pomieszczenia.")
+    with st.expander("➕ Wybierz Pomieszczenie do swojego Planu (Tylko zdefiniowane przez Inwestora)"):
+        with st.form("form_add_room", clear_on_submit=True):
+            # Zaciągnij dostępne pokoje z bazy (tabela 'rooms')
+            try:
+                available_rooms_req = supabase.table("rooms").select("*").execute()
+                available_rooms = available_rooms_req.data or []
+            except:
+                available_rooms = []
+            
+            if not available_rooms:
+                st.warning("Inwestor nie zdefiniował jeszcze żadnych pomieszczeń w słowniku projektu.")
+                p_name = None
+                st.form_submit_button("Dodaj pomieszczenie", type="primary", disabled=True)
+            else:
+                room_names = [r.get("name", "Nieznane") for r in available_rooms]
+                p_name = st.selectbox("Wybierz pomieszczenie z listy Inwestora *", options=room_names)
+                
+                if st.form_submit_button("Dodaj do swojego Planu", type="primary"):
+                    if p_name:
+                        u_id = st.session_state.get('user_id')
+                        res = phase_service.create_phase(project_id, p_name)
+                        if res.get("success"):
+                            st.success(f"Pomieszczenie '{p_name}' zostało dodane do Twojego planu!")
+                            st.rerun()
+                        else:
+                            st.error(f"Błąd bazy danych: {res.get('error')}")
     
     st.markdown("---")
     
