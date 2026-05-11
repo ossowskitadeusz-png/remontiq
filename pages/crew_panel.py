@@ -84,7 +84,7 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     
     with tab_new_proposal:
         st.subheader("➕ Wyślij Nową Wycenę")
-        render_new_proposal_form(supabase, negotiation_service, phase_service, project_id, task_service)
+        render_new_proposal_form(supabase, negotiation_service, phase_service, selected_project_id, task_service)
         
     with tab_quotes:
         st.subheader("📤 Propozycje wysłane do Inwestora")
