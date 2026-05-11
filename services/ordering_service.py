@@ -12,8 +12,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class OrderingService:
-    def __init__(self, supabase: Client):
+    def __init__(self, supabase: Client, task_service=None):
         self.supabase = supabase
+        self.task_service = task_service
         logger.info(f"OrderingService v2.2 initialized. USE_NEW_DEPENDENCIES={USE_NEW_DEPENDENCIES}")
 
     # ========================================================================
