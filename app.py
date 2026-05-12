@@ -166,6 +166,7 @@ change_service = st.session_state.change_service
 # Importy nowych paneli (Sprint 24)
 from pages.crew_panel import render_crew_panel
 from pages.investor_panel import render_investor_panel
+from components.chat_component import render_chat_component
 
 def read_table(table_name, select="*", filters=None, order_by=None):
     query = supabase.table(table_name).select(select)
@@ -1701,7 +1702,23 @@ if st.session_state['role'] == "crew":
     elif menu == "🚨 Blokady i Materiały":
         st.title("🚨 Zgłoś problem")
     elif menu == "💬 Czat Budowy":
-        st.title("💬 Czat")
+        # MAPOWANIE SESJI PIN (Dla kompatybilności z ChatService)
+        if "role" in st.session_state:
+            if st.session_state["role"] == "investor":
+                st.session_state["user_role"] = "INVESTOR"
+                st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
+                st.session_state["user_name"] = "Inwestor (PIN)"
+            elif st.session_state["role"] == "crew":
+                st.session_state["user_role"] = "CREW_LEAD"
+                st.session_state["user_id"] = "00000000-0000-0000-0000-000000000002"
+                st.session_state["user_name"] = "Karol (PIN)"
+
+        # Renderowanie komponentu czatu
+        render_chat_component(
+            supabase=supabase,
+            user_id=st.session_state.get("user_id"),
+            user_role=st.session_state.get("user_role")
+        )
     st.stop()
 
 # --- DALSZA LOGIKA DLA INWESTORA ---
