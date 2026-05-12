@@ -1703,22 +1703,27 @@ if st.session_state['role'] == "crew":
     elif menu == "🚨 Blokady i Materiały":
         st.title("🚨 Zgłoś problem")
     elif menu == "chat" or "Czat Budowy" in str(menu):
-        # MAPOWANIE SESJI PIN
-        if "role" in st.session_state:
-            if st.session_state["role"] == "investor":
-                st.session_state["user_role"] = "INVESTOR"
-                st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
-                st.session_state["user_name"] = "Inwestor (PIN)"
-            elif st.session_state["role"] == "crew":
-                st.session_state["user_role"] = "CREW_LEAD"
-                st.session_state["user_id"] = "00000000-0000-0000-0000-000000000002"
-                st.session_state["user_name"] = "Karol (PIN)"
+        try:
+            # MAPOWANIE SESJI PIN
+            if "role" in st.session_state:
+                if st.session_state["role"] == "investor":
+                    st.session_state["user_role"] = "INVESTOR"
+                    st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
+                    st.session_state["user_name"] = "Inwestor (PIN)"
+                elif st.session_state["role"] == "crew":
+                    st.session_state["user_role"] = "CREW_LEAD"
+                    st.session_state["user_id"] = "00000000-0000-0000-0000-000000000002"
+                    st.session_state["user_name"] = "Karol (PIN)"
 
-        render_chat_component(
-            supabase=supabase,
-            user_id=st.session_state.get("user_id"),
-            user_role=st.session_state.get("user_role")
-        )
+            # Uruchomienie komponentu
+            render_chat_component(
+                supabase=supabase,
+                user_id=st.session_state.get("user_id"),
+                user_role=st.session_state.get("user_role")
+            )
+        except Exception as e:
+            st.error(f"❌ Krytyczny błąd komponentu Czatu: {e}")
+            st.info("💡 Zgłoś ten błąd Architektowi.")
     st.stop()
 
 # --- DALSZA LOGIKA DLA INWESTORA ---
