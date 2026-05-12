@@ -81,7 +81,7 @@ class ChatService:
             return [], 0
     
     def get_chat_history(self, task_id: str, limit: int = 50, offset: int = 0) -> Tuple[List[Dict], int]:
-        """Pobiera historię rozmowy (tylko TEXT messages)."""
+        """Pobiera historię rozmowy dla konkretnego zadania."""
         try:
             response = self.supabase.table("messages")\
                 .select("*", count="exact")\
@@ -92,11 +92,26 @@ class ChatService:
                 .execute()
             
             messages = response.data or []
-            messages.reverse() # Oldest first
+            messages.reverse()
             return messages, response.count or 0
         except Exception as e:
             logger.error(f"get_chat_history error: {str(e)}")
             return [], 0
+
+    def get_project_chat_history(self, project_id: str, limit: int = 100) -> List[Dict]:
+        """Pobiera historię rozmowy dla CAŁEGO projektu."""
+        try:
+            response = self.supabase.table("messages")\
+                .select("*")\
+                .eq("project_id", project_id)\
+                .eq("message_type", "TEXT")\
+                .order("created_at", desc=False)\
+                .limit(limit)\
+                .execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"get_project_chat_history error: {str(e)}")
+            return []
     
     def get_unread_count(self, user_id: str, user_role: str) -> Dict:
         """Licznik nieodczytanych wiadomości przez RPC."""
