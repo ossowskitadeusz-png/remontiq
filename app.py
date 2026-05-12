@@ -1514,6 +1514,7 @@ else:
         "budget": "💰 Budżet i Finanse",
         "settings": "⚙️ Słownik i Ustawienia",
         "charter": "🏗️ Charter Projektu",
+        "chat": "💬 Czat Budowy",
         "logout": "🚪 Wyloguj"
     }
     
@@ -1701,8 +1702,8 @@ if st.session_state['role'] == "crew":
         
     elif menu == "🚨 Blokady i Materiały":
         st.title("🚨 Zgłoś problem")
-    elif menu == "💬 Czat Budowy":
-        # MAPOWANIE SESJI PIN (Dla kompatybilności z ChatService)
+    elif menu == "chat" or "Czat Budowy" in str(menu):
+        # MAPOWANIE SESJI PIN
         if "role" in st.session_state:
             if st.session_state["role"] == "investor":
                 st.session_state["user_role"] = "INVESTOR"
@@ -1713,7 +1714,6 @@ if st.session_state['role'] == "crew":
                 st.session_state["user_id"] = "00000000-0000-0000-0000-000000000002"
                 st.session_state["user_name"] = "Karol (PIN)"
 
-        # Renderowanie komponentu czatu
         render_chat_component(
             supabase=supabase,
             user_id=st.session_state.get("user_id"),
