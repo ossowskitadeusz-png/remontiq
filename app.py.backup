@@ -6,7 +6,7 @@ import time
 from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
-APP_VERSION = "sprint25-v1.0-Messenger-Production"
+APP_VERSION = "sprint23-v2.2-SSoT-Architecture"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -305,60 +305,15 @@ def get_project_metadata():
         return None
 
 def create_project_metadata(**kwargs):
-    """
-    Tworzy nowy projekt i automatycznie przypisuje go do zalogowanego użytkownika.
-    
-    ✅ SECURE: Automatyczne przypisanie user_id
-    ✅ AUDIT: Logowanie każdego projektu
-    ✅ SAFE: Error handling z backupem danych
-    """
     try:
-        # ============================================================
-        # KROK 1: SECURITY – Automatyczne przypisanie właściciela
-        # ============================================================
-        if "user_id" not in kwargs:
-            if "user_id" in st.session_state:
-                kwargs["user_id"] = st.session_state.user_id
-            else:
-                st.error("❌ Nie jesteś zalogowany.")
-                return None
-        
-        # ============================================================
-        # KROK 2: Formatowanie dat (z zachowaniem nazw pól!)
-        # ============================================================
-        from datetime import date
         if 'planned_start_date' in kwargs and isinstance(kwargs['planned_start_date'], date):
             kwargs['planned_start_date'] = kwargs['planned_start_date'].isoformat()
-        
         if 'planned_end_date' in kwargs and isinstance(kwargs['planned_end_date'], date):
             kwargs['planned_end_date'] = kwargs['planned_end_date'].isoformat()
-        
-        # ============================================================
-        # KROK 3: AUDIT – Logowanie
-        # ============================================================
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Creating project for user {kwargs['user_id']}")
-        
-        # ============================================================
-        # KROK 4: Wstawienie do bazy
-        # ============================================================
-        result = supabase.table("project_metadata").insert(kwargs).execute()
-        
-        if result.data and len(result.data) > 0:
-            project_id = result.data[0]['id']
-            logger.info(f"✅ Project created successfully: {project_id}")
-            return result
-        else:
-            st.error("❌ Projekt nie został utworzony (brak danych w odpowiedzi).")
-            return None
-    
+        return supabase.table("project_metadata").insert(kwargs).execute()
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"❌ Error creating project: {str(e)}")
-        st.error(f"❌ Błąd tworzenia projektu: {e}")
-        st.info("💡 Możliwe przyczyny:\n- Brak kolumny `user_id` w tabeli\n- Wyłączone RLS\n- Brak uprawnień do wstawiania")
+        st.error(f"❌ Błąd tworzenia projektu w Supabase: {e}")
+        st.info("Prawdopodobna przyczyna: Brak kolumny w tabeli project_metadata lub brak uprawnień (RLS).")
         return None
 
 def update_project_metadata(project_id, **kwargs):
