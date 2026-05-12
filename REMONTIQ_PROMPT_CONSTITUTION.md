@@ -33,6 +33,13 @@ Poniżej znajduje się zaawansowany prompt, który definiuje architekturę i log
     - **Panel Inwestora:** Dashboard finansowy, akceptacja wycen, podgląd postępów.
     - **Panel Ekipy:** Zarządzanie kolejnością zadań, wysyłanie ofert cenowych, raportowanie zakończenia prac.
 
+5.  **System Komunikacji i Audytu (Messenger & Activity Log):**
+    - **Natywna Integracja:** Czat oparty na tabeli `task_comments`, a zdarzenia systemowe na `activity_log`.
+    - **Model Iniekcji (Streamlit Cloud):** Ze względu na izolację sesji w folderze `pages/`, Czat musi być wstrzyknięty jako komponent (`components/chat_component.py`) bezpośrednio do `app.py`.
+    - **Autoryzacja PIN-based:** Mapowanie ról logowania PIN (investor, crew) na stałe UUID (Inwestor: `...1`, Karol: `...2`) w celu zapewnienia spójności w bazie bez Supabase Auth.
+    - **Bezpieczeństwo (RLS):** Dla tabel komunikacji RLS musi być wyłączony (DISABLE RLS), aby umożliwić zapisywanie wiadomości przez system logowania PIN.
+    - **Otwarta Księga:** Interfejs wspiera widok globalny (cały projekt) oraz kontekstowy (konkretne zadanie).
+
 **Wymagania Techniczne:**
 - Kod musi być modularny (odseparowane serwisy: `TaskService`, `NegotiationService`, `OrderingService`).
 - Użyj transakcji bazodanowych (`upsert` dla batchy), aby uniknąć niespójności przy zmianie kolejności.
