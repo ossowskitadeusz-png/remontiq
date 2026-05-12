@@ -87,13 +87,9 @@ def render_chat_component(supabase, user_id, user_role):
     # ============================================================
     st.divider()
     
-    # Jeśli jesteśmy w widoku globalnym, musimy wiedzieć do jakiego zadania przypisać (opcjonalnie)
+    # Jeśli jesteśmy w widoku globalnym, wiadomość może być przypisana do projektu (task_id = NULL)
+    # Nasz SQL na to pozwala, więc nie musimy wymuszać zadania.
     active_task_id = selected_task_id
-    if not active_task_id:
-        # Pobierz pierwsze lepsze zadanie dla zachowania spójności audytu
-        tasks_fallback = supabase.table("tasks").select("id").eq("project_id", selected_project_id).limit(1).execute()
-        if tasks_fallback.data:
-            active_task_id = tasks_fallback.data[0]['id']
 
     with st.container():
         input_col, btn_col = st.columns([4, 1])
@@ -104,18 +100,18 @@ def render_chat_component(supabase, user_id, user_role):
                 if new_msg:
                     res = chat_service.send_message(
                         project_id=selected_project_id,
-                        task_id=active_task_id,
+                        task_id=active_task_id, # Może być None dla wiadomości ogólnych
                         content=new_msg,
                         sender_id=user_id,
                         sender_role=user_role,
                         sender_display_name=st.session_state.get("user_name", "Użytkownik"),
                         recipient_role="BOTH",
-                        message_type="TEXT" # FIX: Musi być TEXT!
+                        message_type="TEXT"
                     )
                     if res["success"]:
                         st.rerun()
                     else:
-                        st.error("Błąd wysyłki.")
+                        st.error(f"Błąd wysyłki: {res.get('error')}")
                 else:
                     st.warning("Pusta wiadomość.")
 
