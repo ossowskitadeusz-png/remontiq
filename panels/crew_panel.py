@@ -54,6 +54,7 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     # 2. DASHBOARD - METRYKI
     all_negs = negotiation_service.get_all_negotiations_for_project(selected_project_id)
     approved_negs = [n for n in all_negs if n['status'] == 'accepted']
+    pending_crew = negotiation_service.get_pending_for_crew(selected_project_id)
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -70,12 +71,18 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
 
     st.markdown("---")
     
+    # ALERT KONTROFERT - Najważniejsza powiadomienie
+    if pending_crew:
+        st.error(f"🚨 **UWAGA! Masz {len(pending_crew)} nową(e) kontrofertę(y) od Inwestora!** Zajrzyj do zakładki 'Kontrpropozycje', aby podjąć decyzję.", icon="🚨")
+    
     # 3. TABY
+    counter_tab_title = f"💬 Kontrpropozycje 🔴 ({len(pending_crew)})" if pending_crew else "💬 Kontrpropozycje"
+    
     tab_planning, tab_new_proposal, tab_quotes, tab_counter, tab_accepted = st.tabs([
         "📋 Plan Remontu",
         "➕ Wyślij Nową Wycenę", 
         "📤 Wysłane Propozycje", 
-        "💬 Kontrpropozycje", 
+        counter_tab_title, 
         "✅ Moje Umowy"
     ])
     
@@ -97,7 +104,6 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
 
     with tab_counter:
         st.subheader("💬 Kontrpropozycje od Inwestora")
-        pending_crew = negotiation_service.get_pending_for_crew(selected_project_id)
         if not pending_crew:
             st.info("Brak nowych kontrpropozycji")
         else:
