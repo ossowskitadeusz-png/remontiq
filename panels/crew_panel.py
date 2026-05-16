@@ -354,6 +354,27 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                     with col_price:
                         if task['final_price']:
                             st.markdown(f"<div style='text-align:right; color:#10b981; font-weight:700;'>{task['final_price']:,.0f} zł</div>", unsafe_allow_html=True)
+                        elif task['status'] == 'PENDING':
+                            with st.popover("💰 Wycena"):
+                                st.caption("Wyślij wycenę do Inwestora")
+                                price_val = st.number_input("Cena (PLN)", min_value=0.0, step=100.0, key=f"price_{task['id']}")
+                                days_val = st.number_input("Czas robocizny (dni)", min_value=1, step=1, value=1, key=f"days_{task['id']}")
+                                if st.button("Wyślij", type="primary", key=f"send_{task['id']}"):
+                                    # Pobieramy serwis z session_state, bo funkcja renderująca go nie przyjmuje
+                                    neg_service = st.session_state.negotiation_service
+                                    success, msg, _ = neg_service.propose_price(
+                                        task_id=task['id'],
+                                        proposed_by='crew',
+                                        price=price_val,
+                                        duration_days=days_val
+                                    )
+                                    if success:
+                                        st.success(msg)
+                                        import time
+                                        time.sleep(1)
+                                        st.rerun()
+                                    else:
+                                        st.error(msg)
                         else:
                             st.markdown(f"<div style='text-align:right; opacity:0.5;'>brak ceny</div>", unsafe_allow_html=True)
             else:
