@@ -358,8 +358,7 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                                 task_service.create_task(
                                     project_id=project_id,
                                     phase_id=phase_id,
-                                    name=new_t_name,
-                                    estimated_duration_days=new_t_dur
+                                    name=new_t_name
                                 )
                                 st.rerun()
 
