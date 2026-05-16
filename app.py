@@ -1814,6 +1814,11 @@ if menu == "home" or menu == "investor_2_0":
                 if not w_name.strip():
                     st.error("Podaj nazwę remontu.")
                 else:
+                    # Ustaw user_id dla systemu PIN (wymagane przez create_project_metadata)
+                    if "user_id" not in st.session_state:
+                        st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
+                        st.session_state["user_role"] = "INVESTOR"
+                        st.session_state["user_name"] = "Inwestor (PIN)"
                     w_end = w_start + timedelta(days=90)
                     res = create_project_metadata(
                         project_name=w_name.strip(),
