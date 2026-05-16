@@ -1699,10 +1699,13 @@ if st.session_state['role'] == "crew":
 
     elif menu == "🚀 Plan na dzisiaj":
         render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
+        st.stop()
         
     elif menu == "🚨 Blokady i Materiały":
         st.title("🚨 Zgłoś problem")
-    elif menu == "chat" or "Czat Budowy" in str(menu):
+        st.stop()
+
+    elif menu == "💬 Czat Budowy" or menu == "chat":
         try:
             # MAPOWANIE SESJI PIN
             if "role" in st.session_state:
@@ -1715,16 +1718,15 @@ if st.session_state['role'] == "crew":
                     st.session_state["user_id"] = "00000000-0000-0000-0000-000000000002"
                     st.session_state["user_name"] = "Karol (PIN)"
 
-            # Uruchomienie komponentu
             render_chat_component(
                 supabase=supabase,
                 user_id=st.session_state.get("user_id"),
                 user_role=st.session_state.get("user_role")
             )
         except Exception as e:
-            st.error(f"❌ Krytyczny błąd komponentu Czatu: {e}")
-            st.info("💡 Zgłoś ten błąd Architektowi.")
-    st.stop()
+            st.error(f"❌ Błąd komponentu Czatu: {e}")
+        st.stop()
+
 
 # --- DALSZA LOGIKA DLA INWESTORA ---
 render_activity_banner("investor")
