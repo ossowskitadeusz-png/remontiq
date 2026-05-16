@@ -6,7 +6,7 @@ import time
 from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
-APP_VERSION = "sprint25-v1.0-Messenger-Production"
+APP_VERSION = "sprint26-v2.0-UX-Overhaul"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
