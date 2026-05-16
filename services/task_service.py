@@ -24,7 +24,7 @@ class TaskService:
             "name": name,
             "description": initial_handshake + description,
             "kanban_status": "TODO",
-            "state": "TODO",
+            "state": "DRAFT",
             "commercial_status": "pending",
             "created_at": datetime.now().isoformat()
         }
