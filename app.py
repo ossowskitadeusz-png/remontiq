@@ -132,36 +132,25 @@ from services.change_service import ChangeService
 from services.timeline_service import TimelineService
 from services.ordering_service import OrderingService
 
-# Inicjalizacja serwisów w session_state (Sprint 24)
-if "task_service" not in st.session_state:
-    st.session_state.task_service = TaskService(supabase)
+# ZAWSZE ŚWIEŻE INSTANCJE (naprawia problem starych błędów zostających w pamięci po aktualizacji GitHuba)
+task_service = TaskService(supabase)
+ordering_service = OrderingService(supabase, task_service)
+negotiation_service = NegotiationService(supabase, task_service=task_service)
+phase_service = PhaseService(supabase)
+timeline_service = TimelineService(
+    supabase, 
+    task_service=task_service, 
+    negotiation_service=negotiation_service
+)
+change_service = ChangeService(supabase)
 
-if "ordering_service" not in st.session_state:
-    st.session_state.ordering_service = OrderingService(supabase, st.session_state.task_service)
-
-if "negotiation_service" not in st.session_state:
-    st.session_state.negotiation_service = NegotiationService(supabase, task_service=st.session_state.task_service)
-
-if "phase_service" not in st.session_state:
-    st.session_state.phase_service = PhaseService(supabase)
-
-if "timeline_service" not in st.session_state:
-    st.session_state.timeline_service = TimelineService(
-        supabase, 
-        task_service=st.session_state.task_service, 
-        negotiation_service=st.session_state.negotiation_service
-    )
-
-if "change_service" not in st.session_state:
-    st.session_state.change_service = ChangeService(supabase)
-
-# Aliasy dla wygody (opcjonalne, ale ułatwiają czytelność niżej)
-task_service = st.session_state.task_service
-ordering_service = st.session_state.ordering_service
-negotiation_service = st.session_state.negotiation_service
-phase_service = st.session_state.phase_service
-timeline_service = st.session_state.timeline_service
-change_service = st.session_state.change_service
+# Nadpisujemy w session_state dla kompatybilności wstecznej modułów, które tam szukają
+st.session_state.task_service = task_service
+st.session_state.ordering_service = ordering_service
+st.session_state.negotiation_service = negotiation_service
+st.session_state.phase_service = phase_service
+st.session_state.timeline_service = timeline_service
+st.session_state.change_service = change_service
 
 # Importy nowych paneli (Sprint 24)
 from panels.crew_panel import render_crew_panel
