@@ -83,11 +83,12 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     st.markdown("---")
     
     # 3. TABY
-    tab_negotiations, tab_changes, tab_budget, tab_timeline = st.tabs([
+    tab_negotiations, tab_changes, tab_budget, tab_timeline, tab_rooms = st.tabs([
         "💰 Negocjacje Cen", 
         "📝 Wnioski o Zmiany", 
         "📊 Analiza Budżetu",
-        "🕒 Oś Czasu Projektu"
+        "🕒 Oś Czasu Projektu",
+        "🏠 Pomieszczenia do remontu"
     ])
     
     with tab_negotiations:
@@ -134,6 +135,52 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
         from components.timeline_widget import render_timeline_widget
         st.subheader("🕒 Oś Czasu Projektu")
         render_timeline_widget(timeline_service, selected_project_id)
+
+    with tab_rooms:
+        st.subheader("🏠 Podziel mieszkanie na poszczólne pomieszczenia")
+        st.write("Wpisz tu pokoje, z których Karol będzie mógł budować swój harmonogram.")
+
+        # Dodawanie nowego pomieszczenia
+        with st.form("add_room_form_center", clear_on_submit=True):
+            col1, col2 = st.columns([3, 1])
+            new_room_name = col1.text_input("Nazwa pomieszczenia (np. Sypialnia, Łazienka)")
+            if col2.form_submit_button("➕ Dodaj do remontu", use_container_width=True):
+                if new_room_name:
+                    try:
+                        supabase.table("rooms").insert({"name": new_room_name, "project_id": selected_project_id}).execute()
+                        st.success(f"Dodano: {new_room_name}")
+                        st.rerun()
+                    except Exception as e:
+                        if "23505" in str(e) or "duplicate" in str(e).lower():
+                            st.warning(f"⚠️ Pokój '{new_room_name}' już istnieje!")
+                        else:
+                            st.error(f"Błąd: {e}")
+                else:
+                    st.error("Podaj nazwę pokoju.")
+
+        # Edycja istniejących
+        st.write("### Edycja istniejących pomieszczeń")
+        rooms_data_c = supabase.table("rooms").select("*").eq("project_id", selected_project_id).execute().data
+        old_names_c = {r['id']: r['name'] for r in rooms_data_c} if rooms_data_c else {}
+        df_r_c = pd.DataFrame(rooms_data_c) if rooms_data_c else pd.DataFrame()
+
+        if not df_r_c.empty:
+            edited_r_c = st.data_editor(df_r_c[['id', 'name']], disabled=["id"], hide_index=True, width="stretch", key="rooms_editor_center")
+            if st.button("💾 Zapisz zmiany w nazwach", type="primary", key="save_rooms_center"):
+                updated = 0
+                for _, row in edited_r_c.iterrows():
+                    rid, new_name, old_name = row['id'], row['name'], old_names_c.get(row['id'], '')
+                    supabase.table("rooms").update({"name": new_name}).eq("id", rid).execute()
+                    if old_name and old_name != new_name:
+                        supabase.table("project_phases")\
+                            .update({"phase_name": new_name})\
+                            .eq("project_id", selected_project_id)\
+                            .eq("phase_name", old_name).execute()
+                        updated += 1
+                st.success(f"✅ Zapisano! Zaktualizowano {updated} pomieszczeń również w planie Karola.")
+                st.rerun()
+        else:
+            st.info("📦 Brak pokójów. Dodaj pierwsze pomieszczenie powyżej.")
 
 # =====================================================
 # KOMPONENTY

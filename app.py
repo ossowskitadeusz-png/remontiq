@@ -2590,13 +2590,13 @@ elif menu == "settings":
         st.warning("⚠️ Brak wybranego projektu w sesji! Wybierz projekt, by konfigurować pokoje.")
         st.stop()
         
-    st.subheader("🏠 Słownik Pomieszczeń Projektu")
+    st.subheader("🏠 Podziel mieszkanie na poszczególne pomieszczenia")
     st.write("Wpisz tu pokoje, z których Karol będzie mógł budować swój harmonogram.")
     
     with st.form("add_room_form", clear_on_submit=True):
         col1, col2 = st.columns([3, 1])
         new_room_name = col1.text_input("Nazwa nowego pomieszczenia (np. Sypialnia, Łazienka)")
-        if col2.form_submit_button("➕ Dodaj do słownika", use_container_width=True):
+        if col2.form_submit_button("➕ Dodaj do remontu", use_container_width=True):
             if new_room_name:
                 try:
                     supabase.table("rooms").insert({"name": new_room_name, "project_id": p_id}).execute()
@@ -2612,27 +2612,31 @@ elif menu == "settings":
                 
     st.write("### Edycja istniejących pomieszczeń")
     
-    # Bezpieczne pobranie tyko pokoi dla TEGO konkretnego projektu
+    # Bezpieczne pobranie tylko pokoi dla TEGO konkretnego projektu
     rooms_data = supabase.table("rooms").select("*").eq("project_id", p_id).execute().data
+    # Budujemy słownik id->old_name PRZED renderowaniem edytora
+    old_names_by_id = {r['id']: r['name'] for r in rooms_data} if rooms_data else {}
     df_r = pd.DataFrame(rooms_data) if rooms_data else pd.DataFrame()
     
     if not df_r.empty:
         edited_r = st.data_editor(df_r[['id', 'name']], disabled=["id"], hide_index=True, width="stretch")
         if st.button("💾 Zapisz zmiany w nazwach", type="primary"):
+            updated = 0
             for _, row in edited_r.iterrows():
-                # 1. Zapisz nową nazwę w tabeli rooms
-                supabase.table("rooms").update({"name": row['name']}).eq("id", row['id']).execute()
-                # 2. SYNCHRONIZACJA: Zaktualizuj tę samą nazwę w project_phases
-                #    (gdy Karol skopiował nazwę przy dodawaniu pomieszczenia)
-                old_name_row = rooms_data[next((i for i, r in enumerate(rooms_data) if r['id'] == row['id']), 0)]
-                old_name = old_name_row.get('name', '')
-                if old_name and old_name != row['name']:
+                room_id = row['id']
+                new_name = row['name']
+                old_name = old_names_by_id.get(room_id, '')
+                # 1. Zawsze zapisz nową nazwę w rooms
+                supabase.table("rooms").update({"name": new_name}).eq("id", room_id).execute()
+                # 2. SYNCHRONIZACJA z project_phases (jeśli nazwa się zmieniła)
+                if old_name and old_name != new_name:
                     supabase.table("project_phases")\
-                        .update({"phase_name": row['name']})\
+                        .update({"phase_name": new_name})\
                         .eq("project_id", p_id)\
                         .eq("phase_name", old_name)\
                         .execute()
-            st.success("✅ Nazwy zaktualizowane (w słowniku i planie Karola)")
+                    updated += 1
+            st.success(f"✅ Nazwy zapisane! Zaktualizowano {updated} pomieszczeń również w planie Karola.")
             st.rerun()
     else:
         st.info("Słownik jest pusty. Dodaj pierwszy pokój powyżej.")
