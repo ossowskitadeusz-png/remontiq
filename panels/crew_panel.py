@@ -258,9 +258,21 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
             else:
                 room_names = [r.get("name", "Nieznane") for r in available_rooms]
                 p_name = st.selectbox("Wybierz pomieszczenie z listy Inwestora *", options=room_names)
-                
-                if st.form_submit_button("Dodaj do Planu", type="primary"):
-                    res = phase_service.create_phase(project_id, p_name)
+
+                col_date, col_days = st.columns(2)
+                from datetime import date as _date, timedelta as _timedelta
+                p_start = col_date.date_input("📅 Kiedy zaczynasz?", value=_date.today())
+                p_days = col_days.number_input("⏱️ Ile dni potrzebujesz?", min_value=1, max_value=365, value=7, step=1)
+                p_end = p_start + _timedelta(days=p_days)
+                st.caption(f"→ Planowany koniec: **{p_end.strftime('%d.%m.%Y')}**")
+
+                if st.form_submit_button("✅ Dodaj do Planu", type="primary"):
+                    res = phase_service.create_phase(
+                        project_id,
+                        p_name,
+                        planned_start_date=p_start.isoformat(),
+                        planned_end_date=p_end.isoformat()
+                    )
                     if res.get("success"):
                         st.success(f"Pomieszczenie '{p_name}' dodane!")
                         st.rerun()

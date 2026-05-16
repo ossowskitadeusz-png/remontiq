@@ -1507,24 +1507,65 @@ if st.session_state['role'] == "crew":
         logout()
         st.rerun()
 else:
-    # Definicja stron Inwestora - ODCHUDZONE MENU (Wersja Minimalistyczna)
+    # ============================================================
+    # MENU INWESTORA – 4 pozycje (czyste i intuicyjne)
+    # ============================================================
+    
+    # Licznik nieprzeczytanych wiadomości dla badge'a czatu
+    try:
+        _p_meta_chat = get_project_metadata()
+        _p_id_chat = _p_meta_chat.get('id') if _p_meta_chat else None
+        if _p_id_chat:
+            _tasks_chat = supabase.table("tasks").select("id").eq("project_id", _p_id_chat).execute().data or []
+            _task_ids_chat = [t['id'] for t in _tasks_chat]
+            _unread = 0
+            if _task_ids_chat:
+                _last_seen = st.session_state.get('chat_last_seen', '2000-01-01')
+                _unread_res = supabase.table("task_comments")\
+                    .select("id", count="exact")\
+                    .in_("task_id", _task_ids_chat)\
+                    .eq("is_deleted", False)\
+                    .neq("author_role", "INVESTOR")\
+                    .gt("created_at", _last_seen)\
+                    .execute()
+                _unread = _unread_res.count or 0
+        else:
+            _unread = 0
+    except:
+        _unread = 0
+
+    _chat_label = f"💬 Czat {'🔴' if _unread > 0 else ''}" + (f" ({_unread}nowych)" if _unread > 0 else "")
+
     INVESTOR_PAGES = {
-        "investor_2_0": "⭐ Centrum Dowodzenia",
-        "tasks": "📋 Plan Remontu",
-        "budget": "💰 Budżet i Finanse",
-        "settings": "🏠 Pomieszczenia do remontu",
-        "charter": "🏗️ Charter Projektu",
-        "chat": "💬 Czat Budowy",
+        "home":   "🏠 Mój Remont",
+        "plan":   "📋 Plan & Postęp",
+        "budget": "💰 Budżet",
+        "chat":   _chat_label,
         "logout": "🚪 Wyloguj"
     }
-    
+
+    # Pulsowanie w CSS gdy są nieprzeczytane
+    if _unread > 0:
+        st.sidebar.markdown("""
+        <style>
+        [data-testid="stRadio"] label:nth-child(4) {
+            animation: pulse 1.5s infinite;
+            color: #f87171 !important;
+            font-weight: 700;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        </style>""", unsafe_allow_html=True)
+
     selected_key = st.sidebar.radio(
-        "Nawigacja", 
+        "Nawigacja",
         options=list(INVESTOR_PAGES.keys()),
-        index=0,  # Wymusza wybór pierwszej opcji (Centrum Dowodzenia 2.0)
+        index=0,
         format_func=lambda x: INVESTOR_PAGES[x]
     )
-    menu = selected_key # Mapujemy dla kompatybilności wstecznej
+    menu = selected_key
 
 # 4. Globalna Logika Wylogowania
 if menu == "logout":
@@ -1744,13 +1785,123 @@ rooms_dict = [{"id": None, "name": "Brak (Ogólne)"}]
 for _, r in df_rooms.iterrows():
     rooms_dict.append({"id": r['id'], "name": r['name']})
 
-if menu == "investor_2_0":
+# ============================================================
+# ROUTING INWESTORA
+# ============================================================
+if menu == "home" or menu == "investor_2_0":
+    # KREATOR STARTOWY – gdy brak projektu
+    if not project_meta:
+        st.markdown("""
+        <div style="text-align:center; padding: 40px 20px 20px 20px;">
+            <div style="font-size: 80px;">🏗️</div>
+            <h1 style="font-size: 2.2rem; margin: 10px 0;">Witaj w RemontIQ!</h1>
+            <p style="color: #94a3b8; font-size: 1.1rem;">Zanim zaczniemy, potrzebujemy 3 informacji o Twoim remoncie.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("wizard_start", clear_on_submit=False):
+            st.markdown("### 📋 Jak nazywa się Twój remont?")
+            w_name = st.text_input("", placeholder="np. Remont mieszkania przy ul. Różanej", label_visibility="collapsed")
+
+            st.markdown("### 💰 Jaki masz całkowity budżet?")
+            w_budget = st.number_input("", min_value=10000, max_value=5000000, step=5000, value=100000, label_visibility="collapsed")
+
+            st.markdown("### 📅 Kiedy planowany start remontu?")
+            w_start = st.date_input("", value=date.today(), label_visibility="collapsed")
+
+            st.markdown("")
+            if st.form_submit_button("🚀 ZACZYNAM REMONT →", use_container_width=True, type="primary"):
+                if not w_name.strip():
+                    st.error("Podaj nazwę remontu.")
+                else:
+                    w_end = w_start + timedelta(days=90)
+                    res = create_project_metadata(
+                        project_name=w_name.strip(),
+                        project_description="",
+                        planned_start_date=w_start,
+                        planned_end_date=w_end,
+                        total_budget=w_budget,
+                        investor_name="Inwestor",
+                        crew_lead_name="Karol",
+                        crew_contact="",
+                        scope_of_work="",
+                        special_conditions="",
+                        status="PLANNING"
+                    )
+                    if res:
+                        st.session_state['wizard_step'] = 'rooms'
+                        st.rerun()
+                    else:
+                        st.error("Błąd zapisu projektu.")
+        st.stop()
+
+    # KREATOR POMIESZCZEŃ – krok 2 po utworzeniu projektu
+    if st.session_state.get('wizard_step') == 'rooms':
+        project_meta = get_project_metadata()
+        p_id = project_meta['id'] if project_meta else None
+
+        st.markdown("""
+        <div style="text-align:center; padding: 20px;">
+            <div style="font-size: 60px;">🏠</div>
+            <h2>Jakie pomieszczenia remontujesz?</h2>
+            <p style="color: #94a3b8;">Kliknij te, które wchodzą w skład Twojego remontu.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        ROOM_OPTIONS = [
+            ("🛁 Łazienka", "Łazienka"), ("🚽 WC / Toaleta", "WC"),
+            ("🍳 Kuchnia", "Kuchnia"), ("🛋️ Salon", "Salon"),
+            ("🛏️ Sypialnia", "Sypialnia"), ("🏠 Przedpokój", "Przedpokój"),
+            ("📚 Gabinet", "Gabinet"), ("🏚️ Strych", "Strych"),
+            ("🏗️ Piwnica", "Piwnica"), ("🪟 Balkon/Taras", "Balkon"),
+        ]
+
+        if 'wizard_rooms' not in st.session_state:
+            st.session_state['wizard_rooms'] = set()
+
+        cols = st.columns(5)
+        for i, (label, name) in enumerate(ROOM_OPTIONS):
+            with cols[i % 5]:
+                is_selected = name in st.session_state['wizard_rooms']
+                btn_style = "primary" if is_selected else "secondary"
+                if st.button(label, key=f"wr_{i}", use_container_width=True, type=btn_style):
+                    if name in st.session_state['wizard_rooms']:
+                        st.session_state['wizard_rooms'].discard(name)
+                    else:
+                        st.session_state['wizard_rooms'].add(name)
+                    st.rerun()
+
+        st.markdown("")
+        custom_room = st.text_input("➕ Inne pomieszczenie (wpisz nazwę i naciśnij Enter)", key="custom_room_w")
+        if custom_room and st.button("Dodaj", key="add_custom_w"):
+            st.session_state['wizard_rooms'].add(custom_room.strip())
+            st.rerun()
+
+        selected_rooms = st.session_state.get('wizard_rooms', set())
+        if selected_rooms:
+            st.success(f"✅ Wybrano: {', '.join(selected_rooms)}")
+        else:
+            st.info("Wybierz przynajmniej jedno pomieszczenie.")
+
+        if st.button("✅ GOTOWE – Wyślij Karolowi do wyceny →", use_container_width=True, type="primary", disabled=not selected_rooms):
+            if p_id and selected_rooms:
+                for room_name in selected_rooms:
+                    try:
+                        supabase.table("rooms").insert({"name": room_name, "project_id": p_id}).execute()
+                    except:
+                        pass
+                st.session_state.pop('wizard_step', None)
+                st.session_state.pop('wizard_rooms', None)
+                st.success("🎉 Projekt skonfigurowany! Karol może teraz budować plan remontu.")
+                st.rerun()
+        st.stop()
+
+    # GŁÓWNY DASHBOARD INWESTORA
     render_investor_panel(supabase, phase_service, negotiation_service, change_service, task_service, timeline_service, ordering_service)
 
 elif menu == "chat":
-    # ============================================================
-    # CZAT BUDOWY - Dostępny dla Inwestora
-    # ============================================================
+    # Oznacz jako przeczytane
+    st.session_state['chat_last_seen'] = datetime.now().isoformat()
     st.session_state["user_role"] = "INVESTOR"
     st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
     st.session_state["user_name"] = "Inwestor (PIN)"
@@ -1760,19 +1911,25 @@ elif menu == "chat":
         user_role=st.session_state["user_role"]
     )
 
-elif menu == "old_dashboard":
-    p_meta = get_project_metadata()
-    if p_meta:
-        render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
+elif menu == "plan":
+    st.title("📋 Plan Remontu")
+    st.caption("Poniżej znajduje się struktura prac ułożona przez Karola, z podziałem na pokoje.")
+    p_id = project_meta.get('id') if project_meta else None
+    if not p_id:
+        st.warning("Najpierw skonfiguruj projekt.")
+        st.stop()
+    phases = phase_service.get_phases(p_id)
+    if not phases:
+        st.info("📭 Karol nie dodał jeszcze żadnych pomieszczeń do swojego planu.")
     else:
-        st.warning("Najpierw utwórz Charter Projektu.")
-
-elif menu == "charter":
-    st.title("🏗️ CHARTER PROJEKTU")
-    st.caption("Główna oś czasu i parametry projektu")
-
-    if not project_meta:
-        st.warning("⚠️ Charter nie został jeszcze utworzony")
+        phase_ids = [p.get("id") for p in phases if p.get("id")]
+        all_tasks = []
+        if phase_ids:
+            try:
+                all_tasks_req = supabase.table("tasks").select("*").in_("phase_id", phase_ids).execute()
+                all_tasks = all_tasks_req.data or []
+            except:
+                all_tasks = []
         with st.form("charter_creation_form", clear_on_submit=False):
             st.subheader("📋 Podstawowe informacje")
             col1, col2 = st.columns(2)
