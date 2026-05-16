@@ -50,6 +50,7 @@ class ChatService:
             response = self.supabase.table("task_comments")\
                 .select("*", count="exact")\
                 .eq("task_id", task_id)\
+                .eq("is_deleted", False)\
                 .order("created_at", desc=False)\
                 .limit(limit)\
                 .execute()

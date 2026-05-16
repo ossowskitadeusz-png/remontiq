@@ -1747,6 +1747,19 @@ for _, r in df_rooms.iterrows():
 if menu == "investor_2_0":
     render_investor_panel(supabase, phase_service, negotiation_service, change_service, task_service, timeline_service, ordering_service)
 
+elif menu == "chat":
+    # ============================================================
+    # CZAT BUDOWY - Dostępny dla Inwestora
+    # ============================================================
+    st.session_state["user_role"] = "INVESTOR"
+    st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
+    st.session_state["user_name"] = "Inwestor (PIN)"
+    render_chat_component(
+        supabase=supabase,
+        user_id=st.session_state["user_id"],
+        user_role=st.session_state["user_role"]
+    )
+
 elif menu == "old_dashboard":
     p_meta = get_project_metadata()
     if p_meta:
