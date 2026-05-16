@@ -1512,7 +1512,7 @@ else:
         "investor_2_0": "⭐ Centrum Dowodzenia",
         "tasks": "📋 Plan Remontu",
         "budget": "💰 Budżet i Finanse",
-        "settings": "⚙️ Słownik i Ustawienia",
+        "settings": "🏠 Pomieszczenia do remontu",
         "charter": "🏗️ Charter Projektu",
         "chat": "💬 Czat Budowy",
         "logout": "🚪 Wyloguj"
@@ -2581,7 +2581,7 @@ elif menu == "negotiations":
                             st.rerun()
 
 elif menu == "settings":
-    st.title("⚙️ Ustawienia i Eksport")
+    st.title("🏠 Pomieszczenia do remontu")
     
     p_meta = get_project_metadata()
     p_id = p_meta.get('id') if p_meta else None
@@ -2620,7 +2620,19 @@ elif menu == "settings":
         edited_r = st.data_editor(df_r[['id', 'name']], disabled=["id"], hide_index=True, width="stretch")
         if st.button("💾 Zapisz zmiany w nazwach", type="primary"):
             for _, row in edited_r.iterrows():
+                # 1. Zapisz nową nazwę w tabeli rooms
                 supabase.table("rooms").update({"name": row['name']}).eq("id", row['id']).execute()
+                # 2. SYNCHRONIZACJA: Zaktualizuj tę samą nazwę w project_phases
+                #    (gdy Karol skopiował nazwę przy dodawaniu pomieszczenia)
+                old_name_row = rooms_data[next((i for i, r in enumerate(rooms_data) if r['id'] == row['id']), 0)]
+                old_name = old_name_row.get('name', '')
+                if old_name and old_name != row['name']:
+                    supabase.table("project_phases")\
+                        .update({"phase_name": row['name']})\
+                        .eq("project_id", p_id)\
+                        .eq("phase_name", old_name)\
+                        .execute()
+            st.success("✅ Nazwy zaktualizowane (w słowniku i planie Karola)")
             st.rerun()
     else:
         st.info("Słownik jest pusty. Dodaj pierwszy pokój powyżej.")
