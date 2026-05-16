@@ -310,16 +310,15 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
 
             if ordered_tasks:
                 for idx, task in enumerate(ordered_tasks):
-                    # Nowy układ kolumn z przyciskami ruchu
-                    col_num, col_info, col_move, col_price = st.columns([0.5, 3, 1, 1.5])
+                    # Nowy układ kolumn z przyciskami: numer, info, ruch up/down, usunięcie, cena
+                    col_num, col_info, col_move, col_del, col_price = st.columns([0.5, 3, 1, 0.7, 1.5])
                     
                     with col_num:
                         st.markdown(f"<div style='padding-top:10px; opacity:0.5;'>#{idx+1}</div>", unsafe_allow_html=True)
                     
                     with col_info:
                         st.write(f"**{task['name']}**")
-                        # Badge statusu
-                        status = task['status'] # READY, PENDING, BLOCKED
+                        status = task['status']
                         if status == 'READY':
                             st.caption("🟢 **Gotowe do realizacji**")
                         elif status == 'PENDING':
@@ -330,13 +329,18 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                     with col_move:
                         m1, m2 = st.columns(2)
                         with m1:
-                            if st.button("⬆️", key=f"up_{task['id']}", disabled=(idx==0)):
+                            if st.button("⬆️", key=f"up_{task['id']}", disabled=(idx==0), help="Przesuń wyżej"):
                                 ordering_service.move_task_up(task['id'])
                                 st.rerun()
                         with m2:
-                            if st.button("⬇️", key=f"down_{task['id']}", disabled=(idx==len(ordered_tasks)-1)):
+                            if st.button("⬇️", key=f"down_{task['id']}", disabled=(idx==len(ordered_tasks)-1), help="Przesuń niżej"):
                                 ordering_service.move_task_down(task['id'])
                                 st.rerun()
+
+                    with col_del:
+                        if st.button("🗑️", key=f"deltask_{task['id']}", help="Usuń to zadanie"):
+                            task_service.delete_task(task['id'])
+                            st.rerun()
                     
                     with col_price:
                         if task['final_price']:
