@@ -337,19 +337,28 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                                 ordering_service.move_task_down(task['id'])
                                 st.rerun()
 
+                    # Zabezpieczenie: jeśli zadanie ma cenę lub nie jest w fazie szkicu - blokujemy edycję/usuwanie
+                    is_locked = bool(task.get('final_price')) or task['status'] != 'PENDING'
+
                     with col_edit:
-                        with st.popover("✏️"):
-                            st.caption("Popraw nazwę zadania")
-                            new_name = st.text_input("Nowa nazwa", value=task['name'], key=f"inp_{task['id']}")
-                            if st.button("Zapisz", key=f"save_{task['id']}", type="primary"):
-                                if new_name and new_name != task['name']:
-                                    task_service.update_task(task['id'], {"name": new_name})
-                                    st.rerun()
+                        if is_locked:
+                            st.button("✏️", key=f"edit_lock_{task['id']}", disabled=True, help="Zadanie zablokowane (w trakcie wyceny lub zatwierdzone)")
+                        else:
+                            with st.popover("✏️"):
+                                st.caption("Popraw nazwę zadania")
+                                new_name = st.text_input("Nowa nazwa", value=task['name'], key=f"inp_{task['id']}")
+                                if st.button("Zapisz", key=f"save_{task['id']}", type="primary"):
+                                    if new_name and new_name != task['name']:
+                                        task_service.update_task(task['id'], {"name": new_name})
+                                        st.rerun()
 
                     with col_del:
-                        if st.button("🗑️", key=f"deltask_{task['id']}", help="Usuń to zadanie"):
-                            task_service.delete_task(task['id'])
-                            st.rerun()
+                        if is_locked:
+                            st.button("🗑️", key=f"del_lock_{task['id']}", disabled=True, help="Zadanie zablokowane (w trakcie wyceny lub zatwierdzone)")
+                        else:
+                            if st.button("🗑️", key=f"deltask_{task['id']}", help="Usuń to zadanie"):
+                                task_service.delete_task(task['id'])
+                                st.rerun()
                     
                     with col_price:
                         if task['final_price']:
