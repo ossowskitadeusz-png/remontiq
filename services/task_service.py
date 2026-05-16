@@ -6,7 +6,7 @@ class TaskService:
     def __init__(self, supabase_client):
         self.supabase = supabase_client
 
-    def create_task(self, project_id: str, phase_id: str, name: str, description: str = "") -> Dict:
+    def create_task(self, project_id: str, phase_id: str, name: str, description: str = "", estimated_duration_days: int = None) -> Dict:
         """Tworzy nowe zadanie w wybranym pokoju/fazie."""
         # Domyślny stempel Handshake dla nowego zadania
         initial_handshake = (
@@ -27,6 +27,7 @@ class TaskService:
             "commercial_status": "pending",
             "created_at": datetime.now().isoformat()
         }
+
         
         res = self.supabase.table("tasks").insert(data).execute()
         return res.data[0] if res.data else {}
