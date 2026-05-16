@@ -310,8 +310,8 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
 
             if ordered_tasks:
                 for idx, task in enumerate(ordered_tasks):
-                    # Nowy układ kolumn z przyciskami: numer, info, ruch up/down, usunięcie, cena
-                    col_num, col_info, col_move, col_del, col_price = st.columns([0.5, 3, 1, 0.7, 1.5])
+                    # Nowy układ kolumn z przyciskami: numer, info, ruch, edycja, usunięcie, cena
+                    col_num, col_info, col_move, col_edit, col_del, col_price = st.columns([0.5, 2.5, 1, 0.7, 0.7, 1.5])
                     
                     with col_num:
                         st.markdown(f"<div style='padding-top:10px; opacity:0.5;'>#{idx+1}</div>", unsafe_allow_html=True)
@@ -336,6 +336,15 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                             if st.button("⬇️", key=f"down_{task['id']}", disabled=(idx==len(ordered_tasks)-1), help="Przesuń niżej"):
                                 ordering_service.move_task_down(task['id'])
                                 st.rerun()
+
+                    with col_edit:
+                        with st.popover("✏️"):
+                            st.caption("Popraw nazwę zadania")
+                            new_name = st.text_input("Nowa nazwa", value=task['name'], key=f"inp_{task['id']}")
+                            if st.button("Zapisz", key=f"save_{task['id']}", type="primary"):
+                                if new_name and new_name != task['name']:
+                                    task_service.update_task(task['id'], {"name": new_name})
+                                    st.rerun()
 
                     with col_del:
                         if st.button("🗑️", key=f"deltask_{task['id']}", help="Usuń to zadanie"):
