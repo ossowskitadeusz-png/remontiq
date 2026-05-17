@@ -1121,10 +1121,11 @@ def calculate_health_score():
     """Oblicza Health Score projektu (średnia ważona 35/25/25/15)."""
     try:
         # 1. POSTĘP (35%)
-        tasks = supabase.table("tasks").select("kanban_status, planned_end_date").execute().data or []
+        tasks = supabase.table("tasks").select("*").execute().data or []
         if not tasks: return {"score": 0, "status": "⚪ BRAK DANYCH", "metrics": {}, "details": {}}
         
-        comp_count = len([t for t in tasks if t.get('kanban_status') == 'COMPLETED'])
+        completed_tasks = [t for t in tasks if is_task_completed_for_progress(t)]
+        comp_count = len(completed_tasks)
         prog_score = (comp_count / len(tasks)) * 100
         
         # 2. HARMONOGRAM (25%)
@@ -1133,7 +1134,7 @@ def calculate_health_score():
         for t in tasks:
             if t.get('planned_end_date'):
                 p_end = datetime.strptime(t['planned_end_date'], "%Y-%m-%d").date()
-                if t['kanban_status'] != 'COMPLETED' and p_end < today:
+                if not is_task_completed_for_progress(t) and p_end < today:
                     delays.append((today - p_end).days)
         avg_delay = sum(delays)/len(delays) if delays else 0
         sched_score = 100 if avg_delay == 0 else (75 if avg_delay <= 3 else (50 if avg_delay <= 7 else 25))
@@ -3083,7 +3084,7 @@ elif menu == "charter":
             c1, c2, c3 = st.columns(3)
             c1.metric("⏳ Dni upłynęło", days_info['elapsed_days'])
             c2.metric("📅 Dni zostało", max(0, days_info['remaining_days']))
-            c3.metric("📊 Postęp", f"{days_info['progress_pct']}%")
+            c3.metric("⏱️ Upływ czasu", f"{days_info['progress_pct']}%")
             st.progress(days_info['progress_pct'] / 100)
         elif project_meta['status'] == "COMPLETED":
             st.success("✅ **Status: UKOŃCZONY**")
@@ -3161,7 +3162,7 @@ elif menu == "dashboard_view":
         m = h['metrics']
         d = h['details']
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Postęp", f"{m['progress']}%", f"{d['completed']}/{d['total']}")
+        c1.metric("🏗️ Postęp prac", f"{m['progress']}%", f"{d['completed']}/{d['total']}")
         c2.metric("Terminy", f"{m['schedule']}%", f"-{d['delay']}d")
         c3.metric("Budżet", f"{m['budget']}%", f"{d['pct']}%")
         c4.metric("Blokery", f"{m['blockers']}%", f"{d['blockers']} szt")
