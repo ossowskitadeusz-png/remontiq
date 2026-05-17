@@ -1943,27 +1943,75 @@ def money(value):
 
 # --- LOGIKA KWALIFIKACJI ZADANIA ---
 def calculate_task_payment_eligibility(task, rules=PAYMENT_RULES):
+    db_price = safe_float(task.get('final_approved_price'))
     h = parse_handshake_data(task.get('description', ''))
     locked_price = h['price']
+    
+    # Użyj db_price, z fallbackiem na locked_price
+    task_price = db_price if db_price > 0 else locked_price
     commercial_status = h['commercial']
-    execution_status = h['execution']
+    is_price_accepted = (commercial_status == rules["required_commercial_status"]) or (db_price > 0)
 
-    if locked_price <= 0:
+    if task_price <= 0:
         return {"eligibility_percent": 0.0, "eligible_value": 0.0, "type": "NO_PRICE", "reason": "Brak ceny."}
 
-    if commercial_status != rules["required_commercial_status"]:
+    if not is_price_accepted:
         return {"eligibility_percent": 0.0, "eligible_value": 0.0, "type": "NOT_LOCKED", "reason": "Cena niezaakceptowana."}
 
-    if execution_status in rules["final_eligible_execution_statuses"]:
-        return {"eligibility_percent": rules["done_percent"], "eligible_value": locked_price * rules["done_percent"], "type": "FINAL_100", "reason": "Zadanie DONE (100%)"}
+    # Wykrywanie statusu - priorytet dla statusu strukturalnego i helpera progress
+    has_structured_status = any(task.get(f) is not None for f in ['kanban_status', 'completion_status', 'status'])
+    status_resolved = None
 
-    if execution_status in rules["advance_eligible_execution_statuses"]:
-        return {"eligibility_percent": rules["advance_percent"], "eligible_value": locked_price * rules["advance_percent"], "type": "ADVANCE_50", "reason": "Zadanie Aktywne (50%)"}
+    if is_task_completed_for_progress(task):
+        status_resolved = "DONE"
+    elif has_structured_status:
+        raw_status = str(task.get('kanban_status') or task.get('completion_status') or task.get('status') or '').upper()
+        if raw_status in ["TODO", "IN_PROGRESS", "AWAITING_INSPECTION", "READY", "PENDING", "NOT_STARTED"]:
+            status_resolved = "IN_PROGRESS"
+        elif raw_status in ["BLOCKED"]:
+            status_resolved = "BLOCKED"
+        else:
+            status_resolved = "OTHER"
+    else:
+        # Legacy EXECUTION marker is used only when structured task status fields are missing.
+        legacy_status = str(h.get('execution', '')).upper()
+        if legacy_status in rules["final_eligible_execution_statuses"]:
+            status_resolved = "DONE"
+        elif legacy_status in rules["advance_eligible_execution_statuses"]:
+            status_resolved = "IN_PROGRESS"
+        elif legacy_status in rules["blocked_execution_statuses"]:
+            status_resolved = "BLOCKED"
+        else:
+            status_resolved = "OTHER"
 
-    if execution_status in rules["blocked_execution_statuses"]:
-        return {"eligibility_percent": rules["blocked_percent"], "eligible_value": 0.0, "type": "BLOCKED", "reason": "Zadanie zablokowane (0%)"}
-
-    return {"eligibility_percent": 0.0, "eligible_value": 0.0, "type": "OTHER", "reason": "Status niekwalifikowany."}
+    if status_resolved == "DONE":
+        return {
+            "eligibility_percent": rules["done_percent"],
+            "eligible_value": task_price * rules["done_percent"],
+            "type": "FINAL_100",
+            "reason": "Zadanie DONE (100%)"
+        }
+    elif status_resolved == "IN_PROGRESS":
+        return {
+            "eligibility_percent": rules["advance_percent"],
+            "eligible_value": task_price * rules["advance_percent"],
+            "type": "ADVANCE_50",
+            "reason": "Zadanie Aktywne (50%)"
+        }
+    elif status_resolved == "BLOCKED":
+        return {
+            "eligibility_percent": rules["blocked_percent"],
+            "eligible_value": 0.0,
+            "type": "BLOCKED",
+            "reason": "Zadanie zablokowane (0%)"
+        }
+    else:
+        return {
+            "eligibility_percent": 0.0,
+            "eligible_value": 0.0,
+            "type": "OTHER",
+            "reason": "Status niekwalifikowany."
+        }
 
 # --- GŁÓWNY KALKULATOR LIMITU ---
 def calculate_hybrid_payment_limit(project_id):
