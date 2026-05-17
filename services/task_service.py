@@ -25,6 +25,7 @@ class TaskService:
             "description": initial_handshake + description,
             "kanban_status": "TODO",
             "state": "DRAFT",
+            "estimated_duration_days": estimated_duration_days if estimated_duration_days is not None else 1,
             "created_at": datetime.now().isoformat()
         }
 

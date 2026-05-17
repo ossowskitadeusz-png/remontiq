@@ -170,7 +170,8 @@ def render_new_proposal_form(supabase, negotiation_service, phase_service, proje
                         project_id=project_id,
                         phase_id=selected_phase_id,
                         name=t_name,
-                        description=final_desc
+                        description=final_desc,
+                        estimated_duration_days=int(proposed_duration)
                     )
                     
                     if new_task:

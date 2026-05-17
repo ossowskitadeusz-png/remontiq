@@ -227,7 +227,7 @@ class TimelineService:
         culprit_tasks = []
         for t in tasks:
             d = t.get("estimated_duration_days") or 1
-            if cumulative >= planned_days:
+            if cumulative + d > planned_days:
                 culprit_tasks.append(t['name'])
             cumulative += d
         
