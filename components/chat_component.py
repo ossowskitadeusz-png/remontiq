@@ -1,100 +1,117 @@
 # components/chat_component.py
+# REMONTIQ CHAT v4.0 — Widok na poziomie projektu
 
 import streamlit as st
 from services.chat_service import ChatService
 from datetime import datetime
 
+
 def render_chat_component(supabase, user_id, user_role):
     """
-    REMONTIQ NATIVE CHAT v3.0
-    ✅ Wykorzystuje Twoje tabele: task_comments i activity_log
-    ✅ Pełna integracja z istniejącymi danymi
+    Czat Budowy v4.0 — wszystkie wiadomości projektu w jednym strumieniu.
+    Nie wymaga wyboru zadania — działa jak kanał projektowy.
     """
-    
-    st.markdown("### 🗣️ Dyskusja Budowy")
-    
     chat_service = ChatService(supabase)
     
-    # 1. Wybór projektu
+    # --- Wybór projektu ---
     try:
         projects = supabase.table("project_metadata").select("id, project_name").execute()
         if not projects.data:
-            st.warning("❌ Brak projektów.")
+            st.warning("Brak projektów.")
             return
         project_dict = {p['project_name']: p['id'] for p in projects.data}
-        selected_project_name = st.selectbox("📁 Projekt:", options=list(project_dict.keys()), key="p_sel_v3")
+        selected_project_name = st.selectbox("📁 Projekt:", options=list(project_dict.keys()), key="chat_proj_v4")
         selected_project_id = project_dict[selected_project_name]
-    except:
-        st.error("Błąd połączenia z bazą.")
+    except Exception as e:
+        st.error(f"Błąd połączenia: {e}")
         return
 
-    # 2. Wybór zadania (Konieczny dla natywnych komentarzy)
-    try:
-        tasks = supabase.table("tasks").select("id, name").eq("project_id", selected_project_id).execute()
-        if not tasks.data:
-            st.info("Dodaj zadania do projektu, aby móc czatować.")
-            return
-        task_dict = {t['name']: t['id'] for t in tasks.data}
-        selected_task_name = st.selectbox("📍 Zadanie / Wątek:", options=list(task_dict.keys()), key="t_sel_v3")
-        selected_task_id = task_dict[selected_task_name]
-    except:
-        st.error("Błąd ładowania zadań.")
-        return
-
+    st.markdown("### 💬 Czat Budowy")
+    st.caption("Wiadomości dla całego projektu. Widoczne dla Inwestora i Ekipy.")
     st.divider()
-
-    tab1, tab2 = st.tabs(["💬 Czat", "📋 Historia Zmian"])
     
-    with tab1:
-        # Historia z task_comments
-        try:
-            messages, _ = chat_service.get_chat_history(selected_task_id)
-            if messages:
-                for msg in messages:
-                    # Rozróżnienie stron (Inwestor vs Ekipa)
-                    is_me = (msg['author_name'] == st.session_state.get("user_name"))
-                    align = "human" if is_me else "ai"
-                    
-                    role_icon = "👷" if msg['author_role'] in ['crew', 'CREW_LEAD'] else "👤"
-                    with st.chat_message(align):
-                        st.write(f"**{role_icon} {msg['author_name']}**: {msg['content']}")
-                        st.caption(f"{msg['created_at'][:16]}")
+    # --- Historia wiadomości projektu ---
+    messages = chat_service.get_project_chat_history(selected_project_id, limit=80)
+    
+    if not messages:
+        st.info("Brak wiadomości. Napisz coś jako pierwszy!")
+    else:
+        for msg in messages:
+            author_role = msg.get('author_role', '')
+            is_investor = author_role in ('INVESTOR', 'investor')
+            is_system = author_role == 'SYSTEM'
+            
+            if is_system:
+                # Wiadomości systemowe — alerty na pełnej szerokości
+                st.markdown(
+                    f"""<div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3);
+                    border-radius:10px; padding:10px 16px; margin:8px 0; font-size:13px; color:#dc2626;">
+                    🤖 <b>System</b> · {msg.get('created_at','')[:16]}<br>
+                    {msg.get('content','')}
+                    </div>""",
+                    unsafe_allow_html=True
+                )
             else:
-                st.info("Brak komentarzy w tym wątku. Napisz coś!")
-        except Exception as e:
-            st.error(f"Błąd: {e}")
-
-        # Wysyłanie
-        st.divider()
-        with st.form("native_chat_form", clear_on_submit=True):
-            new_msg = st.text_area("Twoja wiadomość:", height=100)
-            if st.form_submit_button("📤 Wyślij", type="primary"):
-                if new_msg.strip():
-                    res = chat_service.send_message(
-                        project_id=selected_project_id,
-                        task_id=selected_task_id,
-                        content=new_msg,
-                        sender_id=user_id,
-                        sender_role=user_role,
-                        sender_display_name=st.session_state.get("user_name", "Użytkownik")
-                    )
-                    if res["success"]:
-                        st.rerun()
-                    else:
-                        st.error(f"Błąd wysyłki: {res.get('error')}")
+                icon = "👤" if is_investor else "👷"
+                align = "human" if is_investor else "ai"
+                with st.chat_message(align):
+                    st.write(f"**{icon} {msg.get('author_name', 'Ktoś')}**: {msg.get('content', '')}")
+                    st.caption(msg.get('created_at', '')[:16])
+    
+    st.divider()
+    
+    # --- Formularz wysyłania ---
+    # Żeby czat działał, potrzebujemy task_id do task_comments.
+    # Używamy "wirtualnego wątku projektowego" — pierwszego zadania lub specjalnego taska.
+    tasks_res = supabase.table("tasks").select("id").eq("project_id", selected_project_id).limit(1).execute()
+    
+    if not tasks_res.data:
+        st.warning("⚠️ Brak zadań w projekcie. Dodaj pierwsze zadanie w 'Plan Remontu', aby aktywować czat.")
+        return
+    
+    # Używamy ID pierwszego zadania jako "wirtualnego kanału projektu"
+    project_channel_task_id = tasks_res.data[0]['id']
+    
+    with st.form("chat_send_form_v4", clear_on_submit=True):
+        new_msg = st.text_area("✏️ Twoja wiadomość:", height=80, placeholder="Napisz do ekipy / inwestora...")
+        if st.form_submit_button("📤 Wyślij", type="primary", use_container_width=True):
+            if new_msg.strip():
+                res = chat_service.send_message(
+                    project_id=selected_project_id,
+                    task_id=project_channel_task_id,
+                    content=new_msg.strip(),
+                    sender_id=user_id,
+                    sender_role=user_role,
+                    sender_display_name=st.session_state.get("user_name", "Użytkownik")
+                )
+                if res.get("success"):
+                    st.rerun()
                 else:
-                    st.warning("Wpisz treść wiadomości.")
-
-    with tab2:
-        # Activity Log z activity_log
-        try:
-            logs, _ = chat_service.get_activity_log(selected_project_id, selected_task_id)
-            if logs:
-                for log in logs:
-                    st.write(f"🔔 **{log['created_at'][:16]}**")
-                    st.write(log['content'])
-                    st.divider()
+                    st.error(f"Błąd wysyłki: {res.get('error')}")
             else:
-                st.info("Brak odnotowanych zmian systemowych.")
-        except Exception as e:
-            st.error(f"Błąd logów: {e}")
+                st.warning("Wpisz treść wiadomości.")
+
+
+def send_system_chat_alert(supabase, project_id: str, message: str):
+    """
+    Wysyła automatyczny alert systemowy do czatu projektu.
+    Używane np. gdy ekipa dodaje zadanie które przeciąga projekt.
+    """
+    try:
+        tasks_res = supabase.table("tasks").select("id").eq("project_id", project_id).limit(1).execute()
+        if not tasks_res.data:
+            return False
+        task_id = tasks_res.data[0]['id']
+        
+        msg_data = {
+            "task_id": task_id,
+            "author_name": "System RemontIQ",
+            "author_role": "SYSTEM",
+            "content": message,
+            "created_at": datetime.now().isoformat(),
+            "is_deleted": False
+        }
+        supabase.table("task_comments").insert(msg_data).execute()
+        return True
+    except Exception as e:
+        return False

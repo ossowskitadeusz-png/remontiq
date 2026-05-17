@@ -187,6 +187,22 @@ def render_new_proposal_form(supabase, negotiation_service, phase_service, proje
                         
                         if success:
                             st.success(f"✅ Dodano robotę i wysłano wycenę!")
+                            # --- SPRAWDŹ CZY NOWE ZADANIE PRZECIĄGA FAZĘ I WYŚLIJ ALERT ---
+                            try:
+                                from services.timeline_service import TimelineService
+                                from components.chat_component import send_system_chat_alert
+                                tl = TimelineService(supabase)
+                                w = tl.get_phase_delay_warning(selected_phase_id)
+                                if w.get("has_warning"):
+                                    alert_msg = (
+                                        f"🚨 ALERT — Pomieszczenie '{selected_phase_name}': "
+                                        f"Szef Ekipy dodał zadanie '{t_name}', które przeciąga "
+                                        f"remont tego pokoju o {w['delay_days']} dni "
+                                        f"(planowany koniec: {w['planned_end']})."
+                                    )
+                                    send_system_chat_alert(supabase, project_id, alert_msg)
+                            except:
+                                pass
                             st.rerun()
                         else:
                             st.error(f"Zadanie utworzone, ale błąd negocjacji: {message}")
@@ -307,6 +323,25 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
             with col_room:
                 title_suffix = " 🔒 `RYCZAŁT`" if is_lump_sum_room else ""
                 st.markdown(f"### 📦 {p['phase_name']}{title_suffix}")
+                
+                # --- OSTRZEŻENIE O PRZECIĄGANIU ---
+                try:
+                    from services.timeline_service import TimelineService
+                    tl_service = TimelineService(supabase)
+                    warning = tl_service.get_phase_delay_warning(phase_id)
+                    if warning.get("has_warning"):
+                        planned_end = warning.get("planned_end", "?")
+                        delay_days = warning.get("delay_days", 0)
+                        culprits = warning.get("culprit_tasks", [])
+                        culprit_str = ", ".join(f'"{t}"' for t in culprits) if culprits else "ostatnio dodane"
+                        st.warning(
+                            f"⚠️ **Uwaga na plan!** Zgłosiłeś datę: {planned_end}, ale Twoje zadania "
+                            f"przeciągają ten pokój o **{delay_days} dni**. "
+                            f"Sprawdź: {culprit_str}. Przemyśl plan!"
+                        )
+                except Exception as _e:
+                    pass
+                
                 if is_lump_sum_room:
                     st.warning("Pomieszczenie zablokowane dla nowych zadań.")
             

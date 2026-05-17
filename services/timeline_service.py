@@ -145,20 +145,30 @@ class TimelineService:
     # =====================================================
     
     def _is_task_completed(self, task: Dict) -> bool:
-        """Zadanie jest ukończone gdy ma zatwierdzającą cenę i statusapproved."""
-        return task.get('commercial_status') == 'approved'
+        """Zadanie fizycznie ukończone i odebrane przez Inwestora."""
+        return task.get('kanban_status') in ('DONE', 'ARCHIVED')
     
     def _is_task_in_progress(self, task: Dict) -> bool:
-        """Zadanie w trakcie = ma zatwierdzoną cenę."""
-        return task.get('final_approved_price') is not None
+        """Zadanie w trakcie fizycznej realizacji."""
+        return task.get('kanban_status') in ('IN_PROGRESS', 'AWAITING_INSPECTION')
     
     def _is_task_pending(self, task: Dict) -> bool:
-        """Zadanie oczekujące = nie ma wyceny."""
-        return task.get('final_approved_price') is None
+        """Zadanie oczekujące = nie zostało jeszcze rozpoczęte."""
+        ks = task.get('kanban_status') or 'TODO'
+        return ks in ('TODO', None)
     
     def _is_task_delayed(self, task: Dict) -> bool:
-        """Zadanie opóźnione (wymagałoby pola terminu w tabeli tasks)."""
-        return False
+        """Zadanie opóźnione — ma datę zakończenia, która już minęła i nie jest ukończone."""
+        if self._is_task_completed(task):
+            return False
+        pd = task.get('planned_end_date')
+        if not pd:
+            return False
+        try:
+            end = datetime.fromisoformat(pd)
+            return datetime.now() > end
+        except:
+            return False
     
     def _get_task_details(self, tasks: List[Dict]) -> List[Dict]:
         """Mapuje szczegóły zadań do formatu czytelnego dla UI."""
@@ -174,6 +184,62 @@ class TimelineService:
             }
             for t in tasks
         ]
+    
+    def get_phase_delay_warning(self, phase_id: str) -> Dict:
+        """
+        Sprawdza, czy zadania w fazie przekraczają zadeklarowaną datę zakończenia.
+        Zwraca ostrzeżenie z liczbą dni przekroczenia i listą winnych zadań.
+        """
+        phase_res = self.supabase.table("project_phases").select(
+            "phase_name, planned_start_date, planned_end_date"
+        ).eq("id", phase_id).single().execute()
+        if not phase_res.data:
+            return {"has_warning": False}
+        
+        phase = phase_res.data
+        planned_end_str = phase.get("planned_end_date")
+        planned_start_str = phase.get("planned_start_date")
+        if not planned_end_str or not planned_start_str:
+            return {"has_warning": False}
+        
+        try:
+            planned_start = datetime.fromisoformat(planned_start_str)
+            planned_end = datetime.fromisoformat(planned_end_str)
+            planned_days = (planned_end - planned_start).days
+        except:
+            return {"has_warning": False}
+        
+        # Suma szacowanych dni wszystkich zadań w fazie
+        tasks_res = self.supabase.table("tasks").select(
+            "id, name, estimated_duration_days, created_at"
+        ).eq("phase_id", phase_id).order("created_at").execute()
+        tasks = tasks_res.data or []
+        
+        total_estimated_days = sum(t.get("estimated_duration_days") or 1 for t in tasks)
+        
+        if total_estimated_days <= planned_days:
+            return {"has_warning": False, "total_estimated_days": total_estimated_days, "planned_days": planned_days}
+        
+        delay_days = total_estimated_days - planned_days
+        
+        # Znajdź zadania "winne" — te dodane po zapełnieniu limitu
+        cumulative = 0
+        culprit_tasks = []
+        for t in tasks:
+            d = t.get("estimated_duration_days") or 1
+            if cumulative >= planned_days:
+                culprit_tasks.append(t['name'])
+            cumulative += d
+        
+        return {
+            "has_warning": True,
+            "delay_days": delay_days,
+            "planned_days": planned_days,
+            "total_estimated_days": total_estimated_days,
+            "planned_end": planned_end_str,
+            "culprit_tasks": culprit_tasks,
+            "phase_name": phase.get("phase_name")
+        }
     
     # =====================================================
     # 4. METRYKI PROJEKTU (KPI)
