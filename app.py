@@ -132,6 +132,8 @@ from services.change_service import ChangeService
 from services.timeline_service import TimelineService
 from services.ordering_service import OrderingService
 
+from components.progress_dashboard import render_project_progress_dashboard
+
 # ZAWSZE ŚWIEŻE INSTANCJE (naprawia problem starych błędów zostających w pamięci po aktualizacji GitHuba)
 task_service = TaskService(supabase)
 ordering_service = OrderingService(supabase, task_service)
@@ -477,42 +479,28 @@ def is_task_completed_for_progress(task):
     return get_task_progress_status(task) in TASK_COMPLETED_STATUSES
 
 
-def render_plan_and_progress_view(project_meta, phase_service):
-    st.title("📋 Plan Remontu")
-    st.caption("Poniżej znajduje się struktura prac ułożona przez Szefa Ekipy, z podziałem na pokoje.")
+def render_plan_and_progress_view(project_meta, phase_service, viewer_role="investor"):
     p_id = project_meta.get('id') if project_meta else None
     if not p_id:
         st.warning("Najpierw skonfiguruj projekt.")
         return
-    phases = phase_service.get_phases(p_id)
-    if not phases:
-        st.info("📭 Szef Ekipy nie dodał jeszcze żadnych pomieszczeń do swojego planu.")
+        
+    # Tytuł i opis zależnie od roli
+    if viewer_role == "investor":
+        st.title("📋 Plan & Postęp Remontu")
+        st.caption("Podgląd struktury prac, postępu w pomieszczeniach oraz szczegółów zadań z wycenami.")
     else:
-        phase_ids = [p.get("id") for p in phases if p.get("id")]
-        all_tasks = []
-        if phase_ids:
-            try:
-                all_tasks_req = supabase.table("tasks").select("*").in_("phase_id", phase_ids).execute()
-                all_tasks = all_tasks_req.data or []
-            except:
-                all_tasks = []
-        # Renderowanie faz z zadaniami
-        for ph in phases:
-            with st.container(border=True):
-                ph_tasks = [t for t in all_tasks if t.get("phase_id") == ph.get("id")]
-                done = sum(1 for t in ph_tasks if is_task_completed_for_progress(t))
-                total = len(ph_tasks)
-                pct = int(done / total * 100) if total > 0 else 0
-                st.markdown(f"### 🏠 {ph.get('phase_name', '—')}  `{pct}%`")
-                st.progress(pct / 100)
-                if ph_tasks:
-                    for t in ph_tasks:
-                        status_icon = "✅" if is_task_completed_for_progress(t) else "🔨"
-                        price = t.get("final_approved_price")
-                        price_str = f"{price:,.0f} zł" if price else "brak ceny"
-                        st.write(f"{status_icon} **{t.get('name')}** — {price_str}")
-                else:
-                    st.caption("Brak zadań w tym pomieszczeniu.")
+        st.title("📋 Plan prac i postęp remontu")
+        st.caption("Podgląd wykonania prac w pomieszczeniach oraz statusów zadań.")
+        
+    render_project_progress_dashboard(
+        supabase=supabase,
+        project_id=p_id,
+        phase_service=phase_service,
+        is_task_completed_for_progress=is_task_completed_for_progress,
+        get_project_days_info=lambda: get_project_days_info(project_meta) if project_meta and project_meta.get('planned_start_date') and project_meta.get('planned_end_date') else None,
+        viewer_role=viewer_role
+    )
 
 
 def report_blocker(task_id, description, blocker_type="OTHER"):
@@ -2372,7 +2360,7 @@ if st.session_state['role'] == "crew":
         st.stop()
         
     elif menu == "📋 Plan & Postęp":
-        render_plan_and_progress_view(project_meta, phase_service)
+        render_plan_and_progress_view(project_meta, phase_service, viewer_role="crew")
         st.stop()
         
     elif menu == "💰 Moje Finanse":
@@ -3067,7 +3055,7 @@ elif menu == "chat":
     )
 
 elif menu == "plan":
-    render_plan_and_progress_view(project_meta, phase_service)
+    render_plan_and_progress_view(project_meta, phase_service, viewer_role="investor")
 
 elif menu == "charter":
     st.title("🏗️ Informacje o Projekcie")
