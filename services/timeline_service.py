@@ -146,7 +146,13 @@ class TimelineService:
     
     def _is_task_completed(self, task: Dict) -> bool:
         """Zadanie fizycznie ukończone i odebrane przez Inwestora."""
-        return task.get('kanban_status') in ('DONE', 'ARCHIVED')
+        status = str(
+            task.get('kanban_status')
+            or task.get('completion_status')
+            or task.get('status')
+            or ''
+        ).upper()
+        return status in ('DONE', 'COMPLETED', 'ARCHIVED')
     
     def _is_task_in_progress(self, task: Dict) -> bool:
         """Zadanie w trakcie fizycznej realizacji."""

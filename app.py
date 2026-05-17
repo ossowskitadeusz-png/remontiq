@@ -461,6 +461,22 @@ def get_project_days_info(project_meta):
         "is_started": today >= start, "is_ended": today >= end
     }
 
+TASK_COMPLETED_STATUSES = {"DONE", "COMPLETED", "ARCHIVED"}
+
+def get_task_progress_status(task):
+    if not isinstance(task, dict):
+        return ""
+    return str(
+        task.get("kanban_status")
+        or task.get("completion_status")
+        or task.get("status")
+        or ""
+    ).upper()
+
+def is_task_completed_for_progress(task):
+    return get_task_progress_status(task) in TASK_COMPLETED_STATUSES
+
+
 def report_blocker(task_id, description, blocker_type="OTHER"):
     """Zapisuje powód, status przed blokadą i blokuje zadanie."""
     try:
@@ -3029,14 +3045,14 @@ elif menu == "plan":
         for ph in phases:
             with st.container(border=True):
                 ph_tasks = [t for t in all_tasks if t.get("phase_id") == ph.get("id")]
-                done = sum(1 for t in ph_tasks if t.get("completion_status") == "COMPLETED")
+                done = sum(1 for t in ph_tasks if is_task_completed_for_progress(t))
                 total = len(ph_tasks)
                 pct = int(done / total * 100) if total > 0 else 0
                 st.markdown(f"### 🏠 {ph.get('phase_name', '—')}  `{pct}%`")
                 st.progress(pct / 100)
                 if ph_tasks:
                     for t in ph_tasks:
-                        status_icon = "✅" if t.get("completion_status") == "COMPLETED" else "🔨"
+                        status_icon = "✅" if is_task_completed_for_progress(t) else "🔨"
                         price = t.get("final_approved_price")
                         price_str = f"{price:,.0f} zł" if price else "brak ceny"
                         st.write(f"{status_icon} **{t.get('name')}** — {price_str}")
