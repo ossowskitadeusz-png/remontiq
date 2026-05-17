@@ -1476,24 +1476,16 @@ render_top_bar(proj_name, role_name, st.session_state.get('user_name', 'Użytkow
 # 3. Definicja Menu w Sidebarze (Zależna od Roli)
 if st.session_state['role'] == "crew":
     st.sidebar.markdown("### 🛠️ ZARZĄDZANIE")
-    if st.sidebar.button("📝 PLAN REMONTU", use_container_width=True, type="primary"):
-        st.session_state['crew_menu_active'] = "planowanie"
-        st.rerun()
     
-    st.sidebar.divider()
-    def clear_crew_menu_active():
-        st.session_state['crew_menu_active'] = None
-
     menu = st.sidebar.radio("👷 NAWIGACJA", [
         "🚀 Plan na dzisiaj",
+        "📝 Plan Remontu",
+        "💰 Moje Finanse",
         "🚨 Blokady i Materiały",
         "💬 Czat Budowy"
-    ], on_change=clear_crew_menu_active)
+    ])
     
     st.sidebar.divider()
-    if st.sidebar.button("💰 MOJE FINANSE", use_container_width=True):
-        st.session_state['crew_menu_active'] = "finanse"
-        st.rerun()
     
     if st.sidebar.button("🚪 Wyloguj", use_container_width=True):
         logout()
@@ -1586,14 +1578,11 @@ if st.session_state['role'] == "crew":
         st.stop()
     
     # Obsługa przycisków funkcyjnych
-    if st.session_state.get('crew_menu_active') == "planowanie":
+    if menu == "📝 Plan Remontu":
         render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
-        if st.button("⬅️ Powrót do menu głównego", use_container_width=True):
-            st.session_state['crew_menu_active'] = None
-            st.rerun()
         st.stop()
         
-    if st.session_state.get('crew_menu_active') == "finanse":
+    elif menu == "💰 Moje Finanse":
         st.markdown(f"""
         <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 30px; border-radius: 20px; color: white; margin-bottom: 25px;">
             <h1 style="margin:0; font-size: 32px;">💰 Moje Finanse</h1>
@@ -1722,10 +1711,6 @@ if st.session_state['role'] == "crew":
             st.divider()
             st.caption("ℹ️ Model Hybrydowy 50/100: 100% DONE | 50% TODO/IN_PROGRESS | 0% BLOCKED | Global Cap 30%.")
             
-
-        if st.button("⬅️ Powrót do Zadania", use_container_width=True):
-            st.session_state['crew_menu_active'] = None
-            st.rerun()
         st.stop()
 
     # (Opcja 🏗️ Plan Remontu 2.0 została przeniesiona do głównego przycisku)
