@@ -32,8 +32,12 @@ def render_crew_execution_panel(supabase, task_service):
     
     # 2. Pobierz zatwierdzone zadania (te, które przeszły Handshake i Inwestor je zatwierdził)
     # commercial_status == 'approved' oznacza zablokowaną wycenę.
-    tasks_res = supabase.table("tasks").select("id, name, kanban_status, final_approved_price").eq("project_id", selected_project_id).eq("commercial_status", "approved").execute()
+    tasks_res = supabase.table("tasks").select("id, name, kanban_status, final_approved_price, phase_id").eq("project_id", selected_project_id).eq("commercial_status", "approved").execute()
     tasks = tasks_res.data or []
+    
+    # Pobierz mapę pokoi/faz dla projektu
+    phases_res = supabase.table("project_phases").select("id, phase_name").eq("project_id", selected_project_id).execute()
+    phases_map = {p["id"]: p["phase_name"] for p in phases_res.data or []}
     
     if not tasks:
         st.info("Brak zadań gotowych do realizacji. Wyceń zadania w 'Plan Remontu' i poczekaj na akceptację Inwestora.")
@@ -53,6 +57,7 @@ def render_crew_execution_panel(supabase, task_service):
         for t in todo:
             with st.container(border=True):
                 st.write(f"**{t['name']}**")
+                st.caption(f"🏠 Pomieszczenie: **{phases_map.get(t.get('phase_id'), 'Ogólne')}**")
                 with st.expander("▶️ Rozpocznij zadanie"):
                     # Ekipa deklaruje, kiedy planuje skończyć
                     end_date = st.date_input("Kiedy planujesz skończyć?", key=f"date_{t['id']}")
@@ -71,6 +76,7 @@ def render_crew_execution_panel(supabase, task_service):
         for t in in_progress:
             with st.container(border=True):
                 st.write(f"**{t['name']}**")
+                st.caption(f"🏠 Pomieszczenie: **{phases_map.get(t.get('phase_id'), 'Ogólne')}**")
                 if t.get('planned_end_date'):
                     st.caption(f"Cel: {t['planned_end_date']}")
                 col_btn1, col_btn2 = st.columns(2)
@@ -93,6 +99,7 @@ def render_crew_execution_panel(supabase, task_service):
         for t in done:
             with st.container(border=True):
                 st.write(f"**{t['name']}**")
+                st.caption(f"🏠 Pomieszczenie: **{phases_map.get(t.get('phase_id'), 'Ogólne')}**")
                 if t.get("kanban_status") == "AWAITING_INSPECTION":
                     st.warning("🟡 Czeka na odbiór Inwestora")
                 else:
