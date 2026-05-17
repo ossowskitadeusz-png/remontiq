@@ -2285,6 +2285,12 @@ def render_activity_banner(role):
 
 # 1. Pobranie metadanych projektu (Wspólne)
 project_meta = get_project_metadata()
+if project_meta:
+    if st.session_state.get('role') == "investor":
+        st.session_state["user_name"] = project_meta.get("investor_name", "Inwestor")
+    elif st.session_state.get('role') == "crew":
+        st.session_state["user_name"] = project_meta.get("crew_lead_name", "Szef Ekipy")
+
 proj_name = project_meta['project_name'] if project_meta else "Brak projektu"
 role_name = "Inwestor" if st.session_state['role'] == "investor" else f"Ekipa ({st.session_state.get('user_name', 'Szef Ekipy')})"
 
@@ -2933,19 +2939,21 @@ if st.session_state['role'] == "crew":
         try:
             # MAPOWANIE SESJI PIN
             if "role" in st.session_state:
+                p_meta = get_project_metadata()
                 if st.session_state["role"] == "investor":
                     st.session_state["user_role"] = "INVESTOR"
                     st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
-                    st.session_state["user_name"] = "Inwestor (PIN)"
+                    st.session_state["user_name"] = p_meta.get("investor_name", "Inwestor") if p_meta else "Inwestor"
                 elif st.session_state["role"] == "crew":
                     st.session_state["user_role"] = "CREW_LEAD"
                     st.session_state["user_id"] = "00000000-0000-0000-0000-000000000002"
-                    st.session_state["user_name"] = "Szef Ekipy (PIN)"
+                    st.session_state["user_name"] = p_meta.get("crew_lead_name", "Szef Ekipy") if p_meta else "Szef Ekipy"
 
             render_chat_component(
                 supabase=supabase,
                 user_id=st.session_state.get("user_id"),
-                user_role=st.session_state.get("user_role")
+                user_role=st.session_state.get("user_role"),
+                project_id=p_id
             )
         except Exception as e:
             st.error(f"❌ Błąd komponentu Czatu: {e}")
@@ -3106,11 +3114,13 @@ elif menu == "chat":
     st.session_state['chat_last_seen'] = datetime.now().isoformat()
     st.session_state["user_role"] = "INVESTOR"
     st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
-    st.session_state["user_name"] = "Inwestor (PIN)"
+    p_meta = get_project_metadata()
+    st.session_state["user_name"] = p_meta.get("investor_name", "Inwestor") if p_meta else "Inwestor"
     render_chat_component(
         supabase=supabase,
         user_id=st.session_state["user_id"],
-        user_role=st.session_state["user_role"]
+        user_role=st.session_state["user_role"],
+        project_id=p_id_global
     )
 
 elif menu == "plan":

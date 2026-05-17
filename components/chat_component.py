@@ -7,31 +7,9 @@ from services.chat_service import ChatService
 from datetime import datetime
 
 
-def render_chat_component(supabase, user_id, user_role):
-    """
-    Czat Budowy v4.0 — wszystkie wiadomości projektu w jednym strumieniu.
-    Nie wymaga wyboru zadania — działa jak kanał projektowy.
-    """
-    chat_service = ChatService(supabase)
-    
-    # --- Wybór projektu ---
-    try:
-        projects = supabase.table("project_metadata").select("id, project_name").execute()
-        if not projects.data:
-            st.warning("Brak projektów.")
-            return
-        project_dict = {p['project_name']: p['id'] for p in projects.data}
-        selected_project_name = st.selectbox("📁 Projekt:", options=list(project_dict.keys()), key="chat_proj_v4")
-        selected_project_id = project_dict[selected_project_name]
-    except Exception as e:
-        st.error(f"Błąd połączenia: {e}")
-        return
-
-    st.markdown("### 💬 Czat Budowy")
-    st.caption("Wiadomości dla całego projektu. Widoczne dla Inwestora i Ekipy.")
-    st.divider()
-    
-    # --- Historia wiadomości projektu ---
+@st.fragment(run_every=5)
+def render_messages_stream(chat_service, selected_project_id):
+    """Auto-odświeżana historia wiadomości projektu (co 5 sekund)."""
     messages = chat_service.get_project_chat_history(selected_project_id, limit=80)
     
     if not messages:
@@ -57,8 +35,45 @@ def render_chat_component(supabase, user_id, user_role):
                 icon = "👤" if is_investor else "👷"
                 align = "human" if is_investor else "ai"
                 with st.chat_message(align):
-                    st.write(f"**{icon} {msg.get('author_name', 'Ktoś')}**: {msg.get('content', '')}")
+                    author_esc = html.escape(str(msg.get('author_name', 'Ktoś')))
+                    content_esc = html.escape(str(msg.get('content', '')))
+                    st.write(f"**{icon} {author_esc}**: {content_esc}")
                     st.caption(msg.get('created_at', '')[:16])
+
+
+def render_chat_component(supabase, user_id, user_role, project_id=None):
+    """
+    Czat Budowy v4.0 — wszystkie wiadomości projektu w jednym strumieniu.
+    Nie wymaga wyboru zadania — działa jak kanał projektowy.
+    """
+    chat_service = ChatService(supabase)
+    
+    # --- Wybór projektu ---
+    try:
+        if project_id:
+            selected_project_id = project_id
+            # Pobieramy nazwę projektu do nagłówka
+            proj_res = supabase.table("project_metadata").select("project_name").eq("id", project_id).execute()
+            selected_project_name = proj_res.data[0]['project_name'] if proj_res.data else "Projekt"
+            st.markdown(f"📁 **Aktywny Projekt:** {selected_project_name}")
+        else:
+            projects = supabase.table("project_metadata").select("id, project_name").execute()
+            if not projects.data:
+                st.warning("Brak projektów.")
+                return
+            project_dict = {p['project_name']: p['id'] for p in projects.data}
+            selected_project_name = st.selectbox("📁 Projekt:", options=list(project_dict.keys()), key="chat_proj_v4")
+            selected_project_id = project_dict[selected_project_name]
+    except Exception as e:
+        st.error(f"Błąd połączenia: {e}")
+        return
+
+    st.markdown("### 💬 Czat Budowy")
+    st.caption("Wiadomości dla całego projektu. Widoczne dla Inwestora i Ekipy.")
+    st.divider()
+    
+    # --- Historia wiadomości projektu (Auto-odświeżana) ---
+    render_messages_stream(chat_service, selected_project_id)
     
     st.divider()
     
