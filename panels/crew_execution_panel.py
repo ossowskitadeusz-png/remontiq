@@ -42,7 +42,7 @@ def render_crew_execution_panel(supabase, task_service):
     # Pogrupuj zadania według statusu wykonania
     todo = [t for t in tasks if t.get("kanban_status") == "TODO" or not t.get("kanban_status")]
     in_progress = [t for t in tasks if t.get("kanban_status") == "IN_PROGRESS"]
-    done = [t for t in tasks if t.get("kanban_status") == "DONE"]
+    done = [t for t in tasks if t.get("kanban_status") in ["DONE", "AWAITING_INSPECTION"]]
     
     st.write(f"Zadania dla: **{crew_name}**")
     
@@ -53,32 +53,53 @@ def render_crew_execution_panel(supabase, task_service):
         for t in todo:
             with st.container(border=True):
                 st.write(f"**{t['name']}**")
-                if st.button("▶️ Rozpocznij", key=f"start_{t['id']}", use_container_width=True):
-                    task_service.update_task(t['id'], {"kanban_status": "IN_PROGRESS", "state": "IN_PROGRESS"})
-                    st.rerun()
+                with st.expander("▶️ Rozpocznij zadanie"):
+                    # Ekipa deklaruje, kiedy planuje skończyć
+                    end_date = st.date_input("Kiedy planujesz skończyć?", key=f"date_{t['id']}")
+                    if st.button("Potwierdź start", key=f"start_{t['id']}", type="primary", use_container_width=True):
+                        # Zapisujemy daty startu i planowanego końca
+                        payload = {
+                            "kanban_status": "IN_PROGRESS", 
+                            "state": "IN_PROGRESS",
+                            "actual_start_date": datetime.now().date().isoformat(),
+                            "planned_end_date": end_date.isoformat()
+                        }
+                        task_service.update_task(t['id'], payload)
+                        st.rerun()
                     
     with c2:
         st.subheader(f"⏳ W trakcie ({len(in_progress)})")
         for t in in_progress:
             with st.container(border=True):
                 st.write(f"**{t['name']}**")
-                st.caption("W realizacji...")
+                if t.get('planned_end_date'):
+                    st.caption(f"Cel: {t['planned_end_date']}")
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    if st.button("✅ Gotowe", key=f"done_{t['id']}", type="primary", use_container_width=True):
-                        task_service.update_task(t['id'], {"kanban_status": "DONE", "state": "COMPLETED"})
+                    if st.button("✅ Gotowe (do odbioru)", key=f"done_{t['id']}", type="primary", use_container_width=True):
+                        # Zmieniamy na AWAITING_INSPECTION zamiast zwykłego DONE
+                        payload = {
+                            "kanban_status": "AWAITING_INSPECTION", 
+                            "state": "COMPLETED",
+                            "actual_end_date": datetime.now().date().isoformat()
+                        }
+                        task_service.update_task(t['id'], payload)
                         st.rerun()
                 with col_btn2:
                     if st.button("🔙 Cofnij", key=f"back_{t['id']}", use_container_width=True):
-                        task_service.update_task(t['id'], {"kanban_status": "TODO", "state": "DRAFT"})
+                        task_service.update_task(t['id'], {"kanban_status": "TODO", "state": "DRAFT", "actual_start_date": None})
                         st.rerun()
 
     with c3:
-        st.subheader(f"✅ Zakończone ({len(done)})")
+        st.subheader(f"🔍 Do odbioru/Zakończone ({len(done)})")
         for t in done:
             with st.container(border=True):
                 st.write(f"**{t['name']}**")
-                st.caption("🟢 Czeka na odbiór Inwestora")
+                if t.get("kanban_status") == "AWAITING_INSPECTION":
+                    st.warning("🟡 Czeka na odbiór Inwestora")
+                else:
+                    st.success("✅ Odebrane przez Inwestora")
+                
                 if st.button("🔙 Przywróć", key=f"revert_{t['id']}", use_container_width=True):
-                    task_service.update_task(t['id'], {"kanban_status": "IN_PROGRESS", "state": "IN_PROGRESS"})
+                    task_service.update_task(t['id'], {"kanban_status": "IN_PROGRESS", "state": "IN_PROGRESS", "actual_end_date": None})
                     st.rerun()

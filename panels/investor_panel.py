@@ -85,12 +85,18 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     st.markdown("---")
     
     # 3. TABY
-    tab_negotiations, tab_changes, tab_budget, tab_timeline, tab_rooms = st.tabs([
+    awaiting_tasks_res = supabase.table("tasks").select("id, name, phase_name, planned_end_date").eq("project_id", selected_project_id).eq("kanban_status", "AWAITING_INSPECTION").execute()
+    awaiting_tasks = awaiting_tasks_res.data or []
+    
+    tab_title_inspections = f"🔍 Odbiory Prac ({len(awaiting_tasks)})" if awaiting_tasks else "🔍 Odbiory Prac"
+    
+    tab_negotiations, tab_changes, tab_budget, tab_timeline, tab_rooms, tab_inspections = st.tabs([
         "💰 Negocjacje Cen", 
         "📝 Wnioski o Zmiany", 
         "📊 Analiza Budżetu",
         "🕒 Oś Czasu Projektu",
-        "🏠 Pomieszczenia do remontu"
+        "🏠 Pomieszczenia do remontu",
+        tab_title_inspections
     ])
     
     with tab_negotiations:
@@ -183,6 +189,36 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                 st.rerun()
         else:
             st.info("📦 Brak pokójów. Dodaj pierwsze pomieszczenie powyżej.")
+
+    with tab_inspections:
+        st.subheader("🔍 Odbiory Prac")
+        st.write("Tu pojawiają się zadania, które Ekipa zgłosiła jako **Zakończone** i czekają na Twój odbiór.")
+        
+        if not awaiting_tasks:
+            st.success("✅ Brak zadań oczekujących na odbiór.")
+        else:
+            for t in awaiting_tasks:
+                with st.container(border=True):
+                    col_info, col_action = st.columns([3, 1])
+                    with col_info:
+                        st.markdown(f"### {t['name']}")
+                        st.caption(f"Pokój: **{t.get('phase_name', 'Brak')}**")
+                        
+                        planned_end = t.get('planned_end_date')
+                        if planned_end:
+                            end_date_obj = datetime.strptime(planned_end, "%Y-%m-%d").date()
+                            today = datetime.now().date()
+                            if today > end_date_obj:
+                                st.error(f"⚠️ Planowo miało się skończyć: {planned_end} (Opóźnienie: {(today - end_date_obj).days} dni)")
+                            else:
+                                st.info(f"📅 Planowano do: {planned_end} (W terminie)")
+                        
+                    with col_action:
+                        if st.button("✅ ZATWIERDŹ ODBIÓR", key=f"insp_{t['id']}", type="primary", use_container_width=True):
+                            # Zmieniamy status zadania na zarchiwizowane/finalnie odebrane
+                            task_service.update_task(t['id'], {"kanban_status": "DONE", "state": "ARCHIVED", "completion_status": "Zatwierdzone", "actual_end_date": datetime.now().date().isoformat()})
+                            st.success("Odebrano pomyślnie!")
+                            st.rerun()
 
 # =====================================================
 # KOMPONENTY
