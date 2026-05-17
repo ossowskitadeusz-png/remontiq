@@ -6,9 +6,24 @@ import sys
 import os
 from supabase import create_client
 
-# Dane z secrets.toml
-SUPABASE_URL = "https://mgrrsrgnalxtbrvzqyid.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1ncnJzcmduYWx4dGJydnpxeWlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwOTQ4NTksImV4cCI6MjA5MzY3MDg1OX0.LtzUjbFOb9uV3T4ptJFbNcp3UHiKl2EDbvw1d1ZZZX0"
+# Dynamicznie pobierz dane z env lub .streamlit/secrets.toml
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    try:
+        import toml
+        secrets_path = os.path.join(".streamlit", "secrets.toml")
+        if os.path.exists(secrets_path):
+            secrets = toml.load(secrets_path)
+            SUPABASE_URL = secrets.get("supabase", {}).get("url")
+            SUPABASE_KEY = secrets.get("supabase", {}).get("key")
+    except Exception:
+        pass
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("Missing SUPABASE_URL or SUPABASE_KEY environment variables.")
+    sys.exit(1)
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 

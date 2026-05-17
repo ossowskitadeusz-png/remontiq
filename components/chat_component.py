@@ -2,6 +2,7 @@
 # REMONTIQ CHAT v4.0 — Widok na poziomie projektu
 
 import streamlit as st
+import html
 from services.chat_service import ChatService
 from datetime import datetime
 
@@ -43,11 +44,12 @@ def render_chat_component(supabase, user_id, user_role):
             
             if is_system:
                 # Wiadomości systemowe — alerty na pełnej szerokości
+                system_content_esc = html.escape(str(msg.get('content','')))
                 st.markdown(
                     f"""<div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3);
                     border-radius:10px; padding:10px 16px; margin:8px 0; font-size:13px; color:#dc2626;">
                     🤖 <b>System</b> · {msg.get('created_at','')[:16]}<br>
-                    {msg.get('content','')}
+                    {system_content_esc}
                     </div>""",
                     unsafe_allow_html=True
                 )

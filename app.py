@@ -1,4 +1,5 @@
 import streamlit as st
+import html
 import pandas as pd
 from datetime import date, timedelta, datetime
 import hashlib
@@ -1375,20 +1376,22 @@ def render_whatsapp_chat(comments, current_user, task_id, context="chat"):
     st.caption("⏱️ Czat odświeża się automatycznie co 7s")
     for idx, c in enumerate(current_comments):
         if c.get('is_deleted'): continue
-        author = c.get('author_name', 'Nieznany')
-        is_me = (author == current_user)
+        author_raw = c.get('author_name', 'Nieznany')
+        is_me = (author_raw == current_user)
+        author = html.escape(str(author_raw))
         bg = "#e0e0e0" if is_me else "#0084ff"
         txt = "#000" if is_me else "#fff"
         align = "flex-end" if is_me else "flex-start"
         margin = "30%" if is_me else "0"
         ts = c.get('created_at', '')[11:16]
         edit_tag = f" (edytowane {c['edit_count']}x)" if c.get('edit_count', 0) > 0 else ""
+        content_esc = html.escape(str(c.get('content') or ''))
         
         st.markdown(f"""
         <div style="display: flex; justify-content: {align}; margin-bottom: 8px; margin-left: {margin};">
             <div style="background-color: {bg}; color: {txt}; padding: 12px 16px; border-radius: 18px; max-width: 85%; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                 <div style="font-size: 11px; font-weight: bold; opacity: 0.8;">{author}</div>
-                {c.get('content', '')}
+                {content_esc}
                 <div style="font-size: 10px; opacity: 0.6; text-align: right;">{ts}{edit_tag}</div>
             </div>
         </div>
@@ -2170,13 +2173,19 @@ if st.session_state["role"] is None:
     st.markdown("<h1 style='text-align:center;margin-top:80px'>RemontIQ</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align:center;color:#a0aec0'>Podaj PIN dostępu do aplikacji.</p>", unsafe_allow_html=True)
 
+    auth_config = st.secrets.get("auth", {})
+    inv_pin = auth_config.get("investor_pin")
+    crw_pin = auth_config.get("crew_pin")
+    
+    if not inv_pin or not crw_pin:
+        st.error("Błąd konfiguracji logowania. Skontaktuj się z administratorem.")
+        st.stop()
+
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         with st.form("login_form"):
             pin = st.text_input("PIN", type="password", placeholder="Wpisz 4-cyfrowy PIN")
             if st.form_submit_button("Zaloguj", width="stretch", type="primary"):
-                inv_pin = st.secrets.get("auth", {}).get("investor_pin", "9999")
-                crw_pin = st.secrets.get("auth", {}).get("crew_pin", "1234")
                 if pin == str(inv_pin):
                     st.session_state["role"] = "investor"
                     st.session_state["last_visit"] = st.session_state.get("current_visit", None)
@@ -2209,7 +2218,8 @@ def render_activity_banner(role):
     for e in events[:5]:
         icon = EVENT_ICONS.get(e["event_type"], ("\u2139\ufe0f", "both"))[0]
         ts = str(e.get("created_at", ""))[:16].replace("T", " ")
-        items_html += f'<div class="activity-item">{icon} {e["description"]} <span style="color:#718096;font-size:11px">({ts})</span></div>'
+        desc_esc = html.escape(str(e.get("description", "")))
+        items_html += f'<div class="activity-item">{icon} {desc_esc} <span style="color:#718096;font-size:11px">({ts})</span></div>'
     
     st.markdown(f"""
     <div class="activity-banner">
@@ -2341,10 +2351,11 @@ if st.session_state['role'] == "crew":
     if "splash_done" not in st.session_state: st.session_state.splash_done = False
     
     if not st.session_state.splash_done:
+        user_name_esc = html.escape(str(st.session_state.get("user_name", "EKIPA"))).upper()
         st.markdown(f"""
         <div style="height: 70vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 30px; color: white; text-align: center; padding: 40px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);">
             <div style="font-size: 100px; margin-bottom: 20px;">🏗️</div>
-            <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY {str(st.session_state.get("user_name", "EKIPA")).upper()}!</h1>
+            <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY {user_name_esc}!</h1>
             <p style="font-size: 24px; opacity: 0.8; margin-top: 10px;">Dziś jest {datetime.now().strftime('%A, %d.%m.%Y')}</p>
             <p style="font-size: 18px; margin-top: 30px; font-style: italic;">"Dobry plan to połowa sukcesu."</p>
         </div>
