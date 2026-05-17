@@ -277,11 +277,22 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
             except:
                 available_rooms = []
             
+            try:
+                existing_phases = phase_service.get_phases(project_id)
+                existing_names = {ph.get("phase_name") for ph in existing_phases}
+            except:
+                existing_names = set()
+            
+            filtered_rooms = [r for r in available_rooms if r.get("name") not in existing_names]
+            
             if not available_rooms:
                 st.warning("Inwestor nie zdefiniował jeszcze żadnych pomieszczeń.")
                 st.form_submit_button("Dodaj", disabled=True)
+            elif not filtered_rooms:
+                st.info("Wszystkie zdefiniowane przez Inwestora pomieszczenia zostały już dodane do Twojego planu.")
+                st.form_submit_button("Dodaj", disabled=True)
             else:
-                room_names = [r.get("name", "Nieznane") for r in available_rooms]
+                room_names = [r.get("name", "Nieznane") for r in filtered_rooms]
                 p_name = st.selectbox("Wybierz pomieszczenie z listy Inwestora *", options=room_names)
 
                 col_date, col_days = st.columns(2)
@@ -292,17 +303,20 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                 st.caption(f"→ Planowany koniec: **{p_end.strftime('%d.%m.%Y')}**")
 
                 if st.form_submit_button("✅ Dodaj do Planu", type="primary"):
-                    res = phase_service.create_phase(
-                        project_id,
-                        p_name,
-                        planned_start_date=p_start.isoformat(),
-                        planned_end_date=p_end.isoformat()
-                    )
-                    if res.get("success"):
-                        st.success(f"Pomieszczenie '{p_name}' dodane!")
-                        st.rerun()
+                    if p_name in existing_names:
+                        st.error(f"Pomieszczenie '{p_name}' jest już w Twoim planie!")
                     else:
-                        st.error(f"Błąd: {res.get('error')}")
+                        res = phase_service.create_phase(
+                            project_id,
+                            p_name,
+                            planned_start_date=p_start.isoformat(),
+                            planned_end_date=p_end.isoformat()
+                        )
+                        if res.get("success"):
+                            st.success(f"Pomieszczenie '{p_name}' dodane!")
+                            st.rerun()
+                        else:
+                            st.error(f"Błąd: {res.get('error')}")
     
     st.markdown("---")
     

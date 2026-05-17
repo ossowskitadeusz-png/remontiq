@@ -551,6 +551,28 @@ class PhaseService:
         except Exception as e:
             return {"error": str(e)}
 
+    def delete_phase(self, phase_id: str) -> Dict:
+        """
+        Usuwa fazę z bazy danych.
+        
+        Args:
+            phase_id: ID fazy do usunięcia
+            
+        Returns:
+            Dict z informacją o rezultacie
+        """
+        try:
+            self.supabase.table(self.table_name).delete().eq("id", phase_id).execute()
+            return {
+                "success": True,
+                "message": "Pomieszczenie zostało usunięte"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Błąd podczas usuwania pomieszczenia: {str(e)}"
+            }
+
 
 # ============================================================================
 # TEST (Do debugowania w Streamlicie)
