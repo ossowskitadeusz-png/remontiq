@@ -1784,30 +1784,41 @@ if menu == "home" or menu == "investor_2_0":
         <div style="text-align:center; padding: 40px 20px 20px 20px;">
             <div style="font-size: 80px;">🏗️</div>
             <h1 style="font-size: 2.2rem; margin: 10px 0;">Witaj w RemontIQ!</h1>
-            <p style="color: #94a3b8; font-size: 1.1rem;">Zanim zaczniemy, potrzebujemy 3 informacji o Twoim remoncie.</p>
+            <p style="color: #94a3b8; font-size: 1.1rem;">Zanim zaczniemy, skonfigurujmy Twój projekt, by spersonalizować komunikację z Ekipą.</p>
         </div>
         """, unsafe_allow_html=True)
 
         with st.form("wizard_start", clear_on_submit=False):
             st.markdown("### 📋 Jak nazywa się Twój remont?")
-            w_name = st.text_input("", placeholder="np. Remont mieszkania przy ul. Różanej", label_visibility="collapsed")
+            w_name = st.text_input("", placeholder="np. Mieszkanie na Wilanowie", label_visibility="collapsed")
+            
+            col_names1, col_names2 = st.columns(2)
+            with col_names1:
+                st.markdown("### 👤 Jak masz na imię?")
+                w_investor_name = st.text_input("Imię Inwestora", placeholder="np. Michał", label_visibility="collapsed")
+            with col_names2:
+                st.markdown("### 👷 Jak ma na imię Szef Ekipy?")
+                w_crew_name = st.text_input("Szef Ekipy", placeholder="np. Karol (lub nazwa firmy)", label_visibility="collapsed")
 
-            st.markdown("### 💰 Jaki masz całkowity budżet?")
-            w_budget = st.number_input("", min_value=10000, max_value=5000000, step=5000, value=100000, label_visibility="collapsed")
-
-            st.markdown("### 📅 Kiedy planowany start remontu?")
-            w_start = st.date_input("", value=date.today(), label_visibility="collapsed")
+            col_bud, col_date = st.columns(2)
+            with col_bud:
+                st.markdown("### 💰 Całkowity budżet (PLN)")
+                w_budget = st.number_input("Budżet", min_value=10000, max_value=5000000, step=5000, value=100000, label_visibility="collapsed")
+            with col_date:
+                st.markdown("### 📅 Planowany start")
+                w_start = st.date_input("Start", value=date.today(), label_visibility="collapsed")
 
             st.markdown("")
             if st.form_submit_button("🚀 ZACZYNAM REMONT →", use_container_width=True, type="primary"):
-                if not w_name.strip():
-                    st.error("Podaj nazwę remontu.")
+                if not w_name.strip() or not w_investor_name.strip() or not w_crew_name.strip():
+                    st.error("Proszę wypełnić wszystkie pola (Nazwa remontu, Twoje imię, Imię Szefa Ekipy).")
                 else:
                     # Ustaw user_id dla systemu PIN (wymagane przez create_project_metadata)
                     if "user_id" not in st.session_state:
                         st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
                         st.session_state["user_role"] = "INVESTOR"
-                        st.session_state["user_name"] = "Inwestor (PIN)"
+                        st.session_state["user_name"] = w_investor_name.strip()
+                    
                     w_end = w_start + timedelta(days=90)
                     res = create_project_metadata(
                         project_name=w_name.strip(),
@@ -1815,8 +1826,8 @@ if menu == "home" or menu == "investor_2_0":
                         planned_start_date=w_start,
                         planned_end_date=w_end,
                         total_budget=w_budget,
-                        investor_name="Inwestor",
-                        crew_lead_name="Karol",
+                        investor_name=w_investor_name.strip(),
+                        crew_lead_name=w_crew_name.strip(),
                         crew_contact="",
                         scope_of_work="",
                         special_conditions="",

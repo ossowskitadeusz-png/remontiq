@@ -12,16 +12,9 @@ from supabase import create_client
 
 def render_crew_panel(supabase=None, phase_service=None, negotiation_service=None, change_service=None, task_service=None, ordering_service=None):
     """
-    Premium Panel Karola - Zarządzanie pracami, wycenami i negocjacjami.
+    Premium Panel Ekipy - Zarządzanie pracami, wycenami i negocjacjami.
     """
     
-    col_title, col_refresh = st.columns([5, 1])
-    with col_title:
-        st.header("👷 Panel Ekipy (Karol)")
-    with col_refresh:
-        if st.button("🔄 Odśwież Dane", use_container_width=True):
-            st.rerun()
-            
     st.markdown("---")
     
     # Inicjalizacja serwisów
@@ -39,15 +32,24 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
         ordering_service = OrderingService(supabase, task_service)
     
     # 1. WYBÓR PROJEKTU
-    projects_res = supabase.table("project_metadata").select("id, project_name").execute()
+    projects_res = supabase.table("project_metadata").select("id, project_name, crew_lead_name").execute()
     projects = projects_res.data or []
     if not projects:
         st.warning("Brak projektów w systemie")
         return
     
-    project_options = {p["project_name"]: p["id"] for p in projects}
+    project_options = {p["project_name"]: p for p in projects}
     selected_project_name = st.selectbox("🏗️ Wybierz projekt", options=project_options.keys(), key="crew_project_select")
-    selected_project_id = project_options[selected_project_name]
+    selected_project_data = project_options[selected_project_name]
+    selected_project_id = selected_project_data["id"]
+    crew_boss_name = selected_project_data.get("crew_lead_name") or "Ekipy"
+
+    col_title, col_refresh = st.columns([5, 1])
+    with col_title:
+        st.header(f"👷 Panel Ekipy ({crew_boss_name})")
+    with col_refresh:
+        if st.button("🔄 Odśwież Dane", use_container_width=True):
+            st.rerun()
     
     st.markdown("---")
     
