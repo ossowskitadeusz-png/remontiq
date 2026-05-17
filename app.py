@@ -1481,11 +1481,14 @@ if st.session_state['role'] == "crew":
         st.rerun()
     
     st.sidebar.divider()
+    def clear_crew_menu_active():
+        st.session_state['crew_menu_active'] = None
+
     menu = st.sidebar.radio("👷 NAWIGACJA", [
         "🚀 Plan na dzisiaj",
         "🚨 Blokady i Materiały",
         "💬 Czat Budowy"
-    ])
+    ], on_change=clear_crew_menu_active)
     
     st.sidebar.divider()
     if st.sidebar.button("💰 MOJE FINANSE", use_container_width=True):
