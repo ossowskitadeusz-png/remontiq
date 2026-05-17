@@ -61,14 +61,7 @@ def render_phase_row(phase):
         return datetime.fromisoformat(date_str.replace('Z', '+00:00')).strftime("%d %b")
 
     st.markdown(f"""
-    <div style="
-        background: white; 
-        padding: 20px; 
-        border-radius: 15px; 
-        margin-bottom: 15px; 
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-    ">
+    <div style="background: white; padding: 20px; border-radius: 15px; margin-bottom: 15px; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
             <div>
                 <span style="font-weight: 800; font-size: 18px; color: #1e293b;">📦 {phase['phase_name']}</span>
@@ -80,14 +73,12 @@ def render_phase_row(phase):
                 <span style="font-size: 12px; color: #64748b;">{format_date(phase['start_date'])} — {format_date(phase['end_date'])}</span>
             </div>
         </div>
-        
         <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
             <div style="flex-grow: 1; background: #f1f5f9; height: 12px; border-radius: 6px; overflow: hidden;">
                 <div style="background: {color}; width: {phase['progress_percent']}%; height: 100%; border-radius: 6px;"></div>
             </div>
             <span style="font-weight: 700; color: #1e293b; font-size: 14px; width: 40px;">{phase['progress_percent']}%</span>
         </div>
-        
         <div style="display: flex; gap: 20px; font-size: 12px; color: #64748b;">
             <span>📋 Zadania: <b>{phase['total_tasks']}</b> (✅{phase['completed_tasks']} ⏳{phase['in_progress_tasks']})</span>
             <span>⏱️ Czas: <b>{phase['elapsed_days']} / {phase['estimated_days']} dni</b></span>
