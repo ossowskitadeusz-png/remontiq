@@ -158,6 +158,9 @@ st.session_state.change_service = change_service
 # Importy nowych paneli (Sprint 24)
 from panels.crew_panel import render_crew_panel
 from panels.investor_panel import render_investor_panel
+import importlib
+import components.chat_component
+importlib.reload(components.chat_component)
 from components.chat_component import render_chat_component
 
 def read_table(table_name, select="*", filters=None, order_by=None):
