@@ -567,6 +567,26 @@ def get_crew_kpis():
     except:
         return {"total_tasks": 0, "in_progress": 0, "blocked": 0, "completed": 0, "awaiting_inspection": 0, "days_to_end": 0, "completion_rate": 0}
 
+# --- WARSTWA KOMPATYBILNOŚCI STATUSÓW DLA CREW_REQUESTS ---
+REQUEST_STATUS_NEW = "NEW"
+REQUEST_STATUS_CONFIRMED = "CONFIRMED"
+REQUEST_STATUS_DELIVERED = "DELIVERED"
+REQUEST_STATUS_CANCELLED = "CANCELLED"
+
+REQUEST_STATUS_LABELS = {
+    "NEW": "Nowe ⏳",
+    "Nowe": "Nowe ⏳",
+    "CONFIRMED": "Potwierdzone 📦",
+    "Potwierdzone": "Potwierdzone 📦",
+    "DELIVERED": "Dostarczone ✅",
+    "Dostarczone": "Dostarczone ✅",
+    "CANCELLED": "Anulowane ❌",
+    "Anulowane": "Anulowane ❌",
+}
+
+OPEN_REQUEST_STATUSES = ["NEW", "Nowe", "CONFIRMED", "Potwierdzone"]
+CLOSED_REQUEST_STATUSES = ["DELIVERED", "Dostarczone", "CANCELLED", "Anulowane"]
+
 def get_crew_requests_grouped():
     """Zwróć zgłoszenia ekipy pogrupowane po statusie."""
     try:
@@ -574,10 +594,17 @@ def get_crew_requests_grouped():
         requests = response.data or []
         grouped = {"Nowe": [], "Potwierdzone": [], "Dostarczone": [], "Anulowane": []}
         for req in requests:
-            s = req.get("status", "Nowe")
-            if s not in grouped:
-                s = "Nowe"
-            grouped[s].append(req)
+            s = str(req.get("status", "NEW")).upper()
+            if s in ["NEW", "NOWE"]:
+                grouped["Nowe"].append(req)
+            elif s in ["CONFIRMED", "POTWIERDZONE"]:
+                grouped["Potwierdzone"].append(req)
+            elif s in ["DELIVERED", "DOSTARCZONE"]:
+                grouped["Dostarczone"].append(req)
+            elif s in ["CANCELLED", "ANULOWANE"]:
+                grouped["Anulowane"].append(req)
+            else:
+                grouped["Nowe"].append(req)
         return grouped
     except Exception:
         return {"Nowe": [], "Potwierdzone": [], "Dostarczone": [], "Anulowane": []}
@@ -585,9 +612,8 @@ def get_crew_requests_grouped():
 def confirm_crew_request(request_id, investor_note="", expected_delivery_date=None):
     """Inwestor potwierdza: 'Wiem, zajmuję się tym'."""
     payload = {
-        "status": "Potwierdzone",
-        "investor_note": investor_note,
-        "confirmed_at": datetime.now().isoformat(),
+        "status": REQUEST_STATUS_CONFIRMED,
+        "investor_note": investor_note
     }
     if expected_delivery_date:
         payload["expected_delivery_date"] = expected_delivery_date.isoformat() if hasattr(expected_delivery_date, 'isoformat') else str(expected_delivery_date)
@@ -596,43 +622,336 @@ def confirm_crew_request(request_id, investor_note="", expected_delivery_date=No
 
 def mark_crew_request_delivered(request_id):
     """Inwestor potwierdza dostawę: 'Materiał jest na budowie'."""
+    req_resp = supabase.table("crew_requests").select("id, task_id, title, is_blocker").eq("id", request_id).execute()
+    if not req_resp.data:
+        return {"status": "error", "message": "Zgłoszenie nie zostało znalezione."}
+    
+    req = req_resp.data[0]
+    task_id = req.get("task_id")
+    is_blocker = req.get("is_blocker")
+    
     supabase.table("crew_requests").update({
-        "status": "Dostarczone",
-        "delivered_at": datetime.now().isoformat()
+        "status": REQUEST_STATUS_DELIVERED
     }).eq("id", request_id).execute()
+    
+    if task_id and is_blocker:
+        # Sprawdź, czy są jeszcze INNE aktywne zgłoszenia blokujące dla tego samego zadania
+        other_resp = supabase.table("crew_requests").select("id").eq("task_id", task_id).eq("is_blocker", True).in_("status", OPEN_REQUEST_STATUSES).neq("id", request_id).execute()
+        
+        if not (other_resp.data and len(other_resp.data) > 0):
+            supabase.table("task_blockers").update({
+                "is_resolved": True,
+                "resolved_at": datetime.now().isoformat(),
+                "resolution_note": "Materiał dostarczony / zgłoszenie zamknięte"
+            }).eq("task_id", task_id).eq("blocker_type", "MISSING_MATERIAL").eq("is_resolved", False).execute()
+            
+            # Sprawdź, czy zostały jakiekolwiek nierozwiązane blokery dla tego zadania
+            remaining = supabase.table("task_blockers").select("id").eq("task_id", task_id).eq("is_resolved", False).execute()
+            if not (remaining.data and len(remaining.data) > 0):
+                supabase.table("tasks").update({
+                    "is_blocked": False,
+                    "blocker_reason": None,
+                    "status_before_block": None
+                }).eq("id", task_id).execute()
+                
     return {"status": "ok"}
 
 def cancel_crew_request(request_id):
     """Inwestor anuluje zgłoszenie — odblokuj powiązane zadanie."""
-    req_data = supabase.table("crew_requests").select("linked_task_id").eq("id", request_id).execute()
-    supabase.table("crew_requests").update({"status": "Anulowane"}).eq("id", request_id).execute()
-    if req_data.data and req_data.data[0].get("linked_task_id"):
-        task_id = req_data.data[0]["linked_task_id"]
-        remaining = supabase.table("crew_requests").select("id").eq("linked_task_id", task_id).in_("status", ["Nowe", "Potwierdzone"]).execute()
-        if not remaining.data:
-            supabase.table("tasks").update({"is_blocked": False, "blocker_reason": None}).eq("id", task_id).execute()
+    req_resp = supabase.table("crew_requests").select("id, task_id, title, is_blocker").eq("id", request_id).execute()
+    if not req_resp.data:
+        return {"status": "error", "message": "Zgłoszenie nie zostało znalezione."}
+    
+    req = req_resp.data[0]
+    task_id = req.get("task_id")
+    is_blocker = req.get("is_blocker")
+    
+    supabase.table("crew_requests").update({
+        "status": REQUEST_STATUS_CANCELLED
+    }).eq("id", request_id).execute()
+    
+    if task_id and is_blocker:
+        # Sprawdź, czy są jeszcze INNE aktywne zgłoszenia blokujące dla tego samego zadania
+        other_resp = supabase.table("crew_requests").select("id").eq("task_id", task_id).eq("is_blocker", True).in_("status", OPEN_REQUEST_STATUSES).neq("id", request_id).execute()
+        
+        if not (other_resp.data and len(other_resp.data) > 0):
+            supabase.table("task_blockers").update({
+                "is_resolved": True,
+                "resolved_at": datetime.now().isoformat(),
+                "resolution_note": "Zgłoszenie anulowane / zamknięte"
+            }).eq("task_id", task_id).eq("blocker_type", "MISSING_MATERIAL").eq("is_resolved", False).execute()
+            
+            # Sprawdź, czy zostały jakiekolwiek nierozwiązane blokery dla tego zadania
+            remaining = supabase.table("task_blockers").select("id").eq("task_id", task_id).eq("is_resolved", False).execute()
+            if not (remaining.data and len(remaining.data) > 0):
+                supabase.table("tasks").update({
+                    "is_blocked": False,
+                    "blocker_reason": None,
+                    "status_before_block": None
+                }).eq("id", task_id).execute()
+                
     return {"status": "ok"}
 
-def submit_crew_request_with_blocker(title, needed_by, is_blocker, linked_task_id=None):
-    """Karol zgłasza potrzebę — jeśli pilne, auto-blokuje zadanie i zapisuje jego status."""
-    payload = {"title": title, "needed_by": str(needed_by), "is_blocker": is_blocker, "status": "Nowe", "linked_task_id": linked_task_id}
+def submit_crew_request_with_blocker(title, needed_by, is_blocker, task_id=None, reported_by="Ekipa"):
+    """Zgłasza potrzebę — jeśli pilne, auto-blokuje zadanie i zapisuje jego status oraz autora."""
+    if is_blocker and not task_id:
+        raise ValueError("Zadanie (task_id) jest wymagane w przypadku zgłoszenia blokującego.")
+        
+    payload = {
+        "title": title,
+        "needed_by": str(needed_by),
+        "is_blocker": is_blocker,
+        "status": REQUEST_STATUS_NEW,
+        "task_id": task_id
+    }
     supabase.table("crew_requests").insert(payload).execute()
-    if linked_task_id and is_blocker:
-        # Pobierz obecny status do pamięci
-        t_data = supabase.table("tasks").select("kanban_status").eq("id", linked_task_id).execute().data[0]
-        old_status = t_data['kanban_status']
+    
+    if task_id and is_blocker:
+        t_resp = supabase.table("tasks").select("id, name, kanban_status, is_blocked, status_before_block").eq("id", task_id).execute()
+        if not t_resp.data:
+            return {"status": "error", "message": f"Zadanie o ID {task_id} nie zostało znalezione."}
+            
+        t_data = t_resp.data[0]
+        old_status = t_data.get('kanban_status') or "IN_PROGRESS"
+        current_is_blocked = t_data.get('is_blocked')
+        current_status_before_block = t_data.get('status_before_block')
+        
+        new_status_before = current_status_before_block if (current_is_blocked and current_status_before_block) else old_status
         
         supabase.table("tasks").update({
             "is_blocked": True, 
             "blocker_reason": f"Brak: {title}", 
-            "status_before_block": old_status
-        }).eq("id", linked_task_id).execute()
+            "status_before_block": new_status_before
+        }).eq("id", task_id).execute()
         
         supabase.table("task_blockers").insert({
-            "task_id": linked_task_id, "blocker_type": "MISSING_MATERIAL", 
-            "description": f"Zgłoszono brak: {title}", "reported_by": "Karol", "is_resolved": False
+            "task_id": task_id,
+            "blocker_type": "MISSING_MATERIAL", 
+            "description": f"Zgłoszono brak: {title}",
+            "reported_by": reported_by,
+            "is_resolved": False
         }).execute()
+        
     return {"status": "ok"}
+
+
+def get_request_next_action_label(status):
+    """Zwraca czytelny dla obu stron status kolejnego kroku w procesie."""
+    if status in ["NEW", "Nowe"]:
+        return "⏳ Ruch Inwestora — czeka na reakcję i potwierdzenie"
+    if status in ["CONFIRMED", "Potwierdzone"]:
+        return "📦 Inwestor potwierdził — oczekiwanie na dostawę/rozwiązanie"
+    if status in ["DELIVERED", "Dostarczone"]:
+        return "✅ Sprawa zamknięta — dostarczone/rozwiązane"
+    if status in ["CANCELLED", "Anulowane"]:
+        return "❌ Anulowane przez Inwestora"
+    return "ℹ️ Status wymaga sprawdzenia"
+
+
+def render_crew_blockers_materials_panel():
+    """Renderuje nowoczesny, funkcjonalny panel zgłoszeń blokad i zapotrzebowań materiałowych dla ekipy."""
+    st.title("🚨 Blokady i Materiały")
+    st.caption("Zgłaszaj braki materiałowe i blokady pracy. Inwestor otrzyma natychmiastowe powiadomienie.")
+    
+    with st.expander("Jak działa ten panel? (Przepływ zgłoszeń i blokad)", expanded=False):
+        st.info("""
+        **System automatycznego rozwiązywania blokad budowy:**
+        1. **Ekipa zgłasza brak materiału lub problem organizacyjny.** Zaznaczenie czerwonego checkboxa *PILNE* powiąże zgłoszenie z wybranym zadaniem i automatycznie zablokuje je w Kanbanie dla obu stron.
+        2. **Inwestor potwierdza w swoim panelu, że zajmuje się sprawą** (może podać szacowany czas dostawy/rozwiązania i napisać notatkę).
+        3. **Po dostarczeniu lub rozwiązaniu Inwestor zamyka zgłoszenie.**
+        4. **Zadanie zostaje automatycznie odblokowane** w Kanbanie, gdy wszystkie powiązane z nim zgłoszenia zostaną oznaczone jako dostarczone/rozwiązane!
+        """)
+    
+    # ==================================================
+    # 1. 🔴 Aktywne blokady pracy
+    # ==================================================
+    st.markdown("## 🔴 Aktywne blokady pracy")
+    
+    try:
+        tasks_resp = supabase.table("tasks").select("id, name, kanban_status, is_blocked, blocker_reason, status_before_block").eq("is_blocked", True).execute()
+        blocked_tasks = tasks_resp.data or []
+    except Exception as e:
+        st.error(f"Błąd podczas pobierania zablokowanych zadań: {e}")
+        blocked_tasks = []
+        
+    if blocked_tasks:
+        for task in blocked_tasks:
+            task_id = task.get("id")
+            task_name = task.get("name") or "Zadanie bez nazwy"
+            kanban_status = task.get("kanban_status") or "Nieznany"
+            blocker_reason = task.get("blocker_reason") or "Brak podanego powodu"
+            
+            # Pobierz aktywne zgłoszenia materiałowe powiązane z tym zadaniem
+            try:
+                reqs_resp = supabase.table("crew_requests").select("*").eq("task_id", task_id).in_("status", OPEN_REQUEST_STATUSES).execute()
+                active_reqs = reqs_resp.data or []
+            except Exception:
+                active_reqs = []
+                
+            with st.container(border=True):
+                st.markdown(f"### 🚧 {task_name}")
+                st.error(f"**Powód wstrzymania:** {blocker_reason}")
+                st.caption(f"Status zadania w Kanbanie: `{kanban_status}`")
+                
+                if active_reqs:
+                    st.markdown("**🔗 Powiązane zgłoszenia materiałowe:**")
+                    for req in active_reqs:
+                        status_label = REQUEST_STATUS_LABELS.get(req.get("status"), req.get("status", "Nieznany"))
+                        needed_by = req.get("needed_by") or "—"
+                        next_action = get_request_next_action_label(req.get("status"))
+                        st.markdown(f"• **{req.get('title')}** (Status: *{status_label}* | Potrzebne do: *{needed_by}*)")
+                        st.caption(f"  ↳ *Kolejny krok: {next_action}*")
+                        if req.get("investor_note"):
+                            st.info(f"📝 **Notatka inwestora:** {req['investor_note']}")
+                        if req.get("expected_delivery_date"):
+                            st.success(f"📅 **Planowana dostawa:** {req['expected_delivery_date']}")
+                else:
+                    st.info("Brak aktywnych zgłoszeń materiałowych bezpośrednio powiązanych z tą blokadą.")
+    else:
+        st.success("✅ Brak aktywnych blokad. Można pracować dalej!")
+        
+    st.divider()
+    
+    # ==================================================
+    # 2. ➕ Nowe zgłoszenie braku / problemu
+    # ==================================================
+    st.markdown("## ➕ Nowe zgłoszenie braku / problemu")
+    
+    try:
+        tasks_to_link_resp = supabase.table("tasks").select("id, name, kanban_status, is_blocked").in_("kanban_status", ["TODO", "IN_PROGRESS"]).execute()
+        active_tasks = tasks_to_link_resp.data or []
+    except Exception:
+        active_tasks = []
+        
+    # Sformatuj opcje dla selectboxa
+    task_options = [("no_task", "Brak powiązanego zadania / ogólne zgłoszenie")]
+    for t in active_tasks:
+        name = t.get("name") or "Zadanie bez nazwy"
+        status = t.get("kanban_status") or "TODO"
+        is_b = " (ZABLOKOWANE)" if t.get("is_blocked") else ""
+        task_options.append((t["id"], f"{name} [{status}]{is_b}"))
+        
+    with st.form("crew_request_form", clear_on_submit=True):
+        title = st.text_input("Nazwa materiału / problemu *", placeholder="np. Brak kabla YDYp 3x2.5")
+        needed_by = st.date_input("Kiedy jest potrzebne?", value=date.today() + timedelta(days=1))
+        
+        selected_task_idx = st.selectbox(
+            "Powiązane zadanie",
+            options=range(len(task_options)),
+            format_func=lambda idx: task_options[idx][1]
+        )
+        selected_task_id = task_options[selected_task_idx][0]
+        
+        is_blocker = st.checkbox("🚨 To blokuje moją pracę teraz (PILNE)")
+        
+        submit_btn = st.form_submit_button("Wyślij zgłoszenie", type="primary")
+        
+        if submit_btn:
+            if not title.strip():
+                st.error("Błąd: Nazwa materiału/problemu jest wymagana.")
+            elif is_blocker and selected_task_id == "no_task":
+                st.error("Błąd: Aby zgłosić zgłoszenie jako PILNE (blokujące), musisz powiązać je z konkretnym zadaniem.")
+            else:
+                task_id_param = None if selected_task_id == "no_task" else selected_task_id
+                user_name = st.session_state.get('user_name', 'Ekipa')
+                try:
+                    res = submit_crew_request_with_blocker(
+                        title=title.strip(),
+                        needed_by=needed_by,
+                        is_blocker=is_blocker,
+                        task_id=task_id_param,
+                        reported_by=user_name
+                    )
+                    if res.get("status") == "ok":
+                        if is_blocker:
+                            st.success("🎉 Zgłoszenie wysłane do Inwestora. Powiązane zadanie zostało oznaczone jako zablokowane do czasu dostawy/rozwiązania.")
+                        else:
+                            st.success("🎉 Zgłoszenie wysłane do Inwestora. Nie blokuje ono pracy w Kanbanie.")
+                        time.sleep(1.5)
+                        st.rerun()
+                    else:
+                        st.error(f"Błąd wysyłania zgłoszenia: {res.get('message', 'Nieznany błąd')}")
+                except Exception as e:
+                    st.error(f"Wystąpił błąd podczas wysyłania: {e}")
+                    
+    st.divider()
+    
+    # ==================================================
+    # 3. 📜 Historia zgłoszonych spraw
+    # ==================================================
+    st.markdown("## 📜 Historia zgłoszonych spraw")
+    
+    try:
+        reqs_resp = supabase.table("crew_requests").select("*").order("created_at", desc=True).execute()
+        all_reqs = reqs_resp.data or []
+    except Exception as e:
+        st.error(f"Błąd podczas pobierania historii zgłoszeń: {e}")
+        all_reqs = []
+        
+    w_toku = [r for r in all_reqs if str(r.get("status", "")).upper() in ["NEW", "NOWE", "CONFIRMED", "POTWIERDZONE"]]
+    dostarczone = [r for r in all_reqs if str(r.get("status", "")).upper() in ["DELIVERED", "DOSTARCZONE"]]
+    anulowane = [r for r in all_reqs if str(r.get("status", "")).upper() in ["CANCELLED", "ANULOWANE"]]
+    
+    t1, t2, t3 = st.tabs(["⏳ W toku", "✅ Dostarczone", "❌ Anulowane"])
+    
+    def render_request_item(req):
+        status_label = REQUEST_STATUS_LABELS.get(req.get("status"), req.get("status", "Nieznany"))
+        needed_by = req.get("needed_by") or "—"
+        created_at = req.get("created_at")
+        created_at_str = created_at[:10] if created_at else "—"
+        
+        is_blocker = req.get("is_blocker", False)
+        type_badge = "🚨 BLOKADA" if is_blocker else "📦 Logistyka"
+        
+        task_id = req.get("task_id")
+        task_name_str = "Brak (ogólne)"
+        if task_id:
+            try:
+                t_resp = supabase.table("tasks").select("name").eq("id", task_id).execute()
+                if t_resp.data:
+                    task_name_str = t_resp.data[0].get("name") or "Zadanie bez nazwy"
+            except Exception:
+                task_name_str = "Błąd pobierania nazwy zadania"
+                
+        with st.container(border=True):
+            col_left, col_right = st.columns([3, 1])
+            with col_left:
+                st.markdown(f"#### {req.get('title')}")
+                st.caption(f"Powiązane zadanie: **{task_name_str}**")
+                st.write(f"📅 Potrzebne do: **{needed_by}** | Zgłoszono: **{created_at_str}**")
+                if req.get("investor_note"):
+                    st.info(f"📝 **Notatka Inwestora:** {req['investor_note']}")
+                if req.get("expected_delivery_date"):
+                    st.success(f"📅 **Szacowana dostawa:** {req['expected_delivery_date']}")
+                next_action = get_request_next_action_label(req.get("status"))
+                st.caption(f"↳ *Kolejny krok: {next_action}*")
+            with col_right:
+                st.markdown(f"**{status_label}**")
+                if is_blocker:
+                    st.error(type_badge)
+                else:
+                    st.info(type_badge)
+
+    with t1:
+        if w_toku:
+            for req in w_toku:
+                render_request_item(req)
+        else:
+            st.info("Brak zgłoszeń w toku.")
+            
+    with t2:
+        if dostarczone:
+            for req in dostarczone:
+                render_request_item(req)
+        else:
+            st.info("Brak dostarczonych zgłoszeń.")
+            
+    with t3:
+        if anulowane:
+            for req in anulowane:
+                render_request_item(req)
+        else:
+            st.info("Brak anulowanych zgłoszeń.")
 
 
 def log_activity(event_type, description, created_by, visible_to="both", task_id=None):
@@ -1106,7 +1425,7 @@ def calculate_smart_recommendations():
     # --- 3. EKIPA ---
     reqs = read_table("crew_requests")
     for _, row in reqs.iterrows():
-        if row['status'] in ('Załatwione', 'Anulowane', 'Przekształcone w zadanie'): continue
+        if row['status'] in ('Załatwione', 'Anulowane', 'Przekształcone w zadanie', 'DELIVERED', 'Dostarczone', 'CANCELLED'): continue
         score, reasons = 0, []
         needed_date = pd.to_datetime(row['needed_by']).date() if pd.notna(row['needed_by']) and row['needed_by'] else today
         days_left = (needed_date - today).days
@@ -1151,6 +1470,246 @@ st.sidebar.caption(f"🚀 Wersja: {APP_VERSION}")
 # ==========================================
 # SPRINT 23 — HYBRID PAYMENT 50/100 (Ścieżka A+)
 # ==========================================
+
+# --- WARSTWA STATUSÓW PŁATNOŚCI (SPRINT 27) ---
+PAYMENT_STATUS_SUBMITTED = "SUBMITTED"
+PAYMENT_STATUS_APPROVED_BY_INVESTOR = "APPROVED_BY_INVESTOR"
+PAYMENT_STATUS_PAID = "PAID"
+PAYMENT_STATUS_REJECTED = "REJECTED"
+
+PAYMENT_LEGACY_APPROVED = "APPROVED"
+
+PAYMENT_OPEN_STATUSES = [
+    PAYMENT_STATUS_SUBMITTED,
+    PAYMENT_STATUS_APPROVED_BY_INVESTOR,
+]
+
+PAYMENT_CLOSED_STATUSES = [
+    PAYMENT_STATUS_PAID,
+    PAYMENT_LEGACY_APPROVED,
+    PAYMENT_STATUS_REJECTED,
+]
+
+PAYMENT_STATUS_LABELS = {
+    "SUBMITTED": "⏳ Czeka na decyzję inwestora",
+    "APPROVED_BY_INVESTOR": "💰 Przelew zadeklarowany przez inwestora",
+    "PAID": "✅ Rozliczone",
+    "APPROVED": "✅ Rozliczone / stary status",
+    "REJECTED": "❌ Odrzucone",
+}
+
+def get_payment_status_label(status):
+    return PAYMENT_STATUS_LABELS.get(status, f"ℹ️ Nieznany status: {status}")
+
+def get_payment_next_action_label(status):
+    if status == PAYMENT_STATUS_SUBMITTED:
+        return "Ruch Inwestora — wniosek czeka na akceptację albo odrzucenie."
+    if status == PAYMENT_STATUS_APPROVED_BY_INVESTOR:
+        return "Ruch Ekipy — po wpływie środków trzeba będzie potwierdzić odbiór."
+    if status in [PAYMENT_STATUS_PAID, PAYMENT_LEGACY_APPROVED]:
+        return "Zamknięte — rozliczenie zakończone."
+    if status == PAYMENT_STATUS_REJECTED:
+        return "Zamknięte — wniosek odrzucony przez Inwestora."
+    return "Status wymaga sprawdzenia."
+
+def get_payment_type_label(payment_type):
+    if payment_type == "REIMBURSEMENT":
+        return "🛒 Zwrot za materiały"
+    if payment_type == "ADVANCE":
+        return "💰 Zaliczka / wypłata 50/100"
+    if payment_type == "FINAL":
+        return "🏁 Rozliczenie końcowe"
+    return f"💳 {payment_type or 'Wniosek finansowy'}"
+
+def parse_pln_amount(raw_value):
+    try:
+        cleaned = str(raw_value).strip().replace(" ", "").replace("\u00a0", "").replace(",", ".")
+        amount = float(cleaned)
+        return amount, None
+    except Exception:
+        return None, "Wprowadź poprawną kwotę, np. 5000 albo 5000,00."
+
+def parse_project_log_data(raw_data):
+    if isinstance(raw_data, dict):
+        return raw_data
+    if isinstance(raw_data, str) and raw_data.strip():
+        try:
+            import json
+            return json.loads(raw_data)
+        except Exception:
+            return {}
+    return {}
+
+PAYMENT_LOG_TYPE = "DECISION"
+
+def is_payment_request_log(log):
+    data = parse_project_log_data(log.get("data"))
+    return bool(data.get("payment_type"))
+
+def build_payment_expense_description(log_id, payment_type, note):
+    marker = f"[payment_request:{log_id}]"
+    safe_note = (note or "").strip()
+    if payment_type == "REIMBURSEMENT":
+        prefix = "[MATERIAŁY] Zwrot wydatków"
+    else:
+        prefix = "[ROBOCIZNA] Rozliczenie / wypłata"
+    if safe_note:
+        return f"{prefix}: {safe_note} {marker}"
+    return f"{prefix} {marker}"
+
+def confirm_payment_received_by_crew(log_id):
+    """Ekipa potwierdza fizyczne zaksięgowanie pieniędzy na koncie i system księguje wydatek."""
+    try:
+        # A) Pobranie wniosku
+        res = supabase.table("project_logs").select("id, status, data, description, title").eq("id", log_id).execute()
+        if not res.data:
+            return {"status": "error", "message": "Wniosek nie został znaleziony."}
+        
+        req = res.data[0]
+        status = req.get("status")
+        
+        # B) Walidacja statusu
+        if status in [PAYMENT_STATUS_PAID, PAYMENT_LEGACY_APPROVED]:
+            return {"status": "ok", "message": "Ten wniosek jest już rozliczony."}
+        if status != PAYMENT_STATUS_APPROVED_BY_INVESTOR:
+            return {"status": "error", "message": "Ten wniosek nie czeka na potwierdzenie odbioru przez Ekipę."}
+        
+        # C) Odczyt danych
+        d = parse_project_log_data(req.get("data"))
+        amount = safe_float(d.get("amount"))
+        payment_type = d.get("payment_type")
+        note = d.get("note") or req.get("description") or "Brak opisu"
+        expense_id = d.get("expense_id")
+        
+        # D) Walidacja kwoty
+        if not amount or amount <= 0:
+            return {"status": "error", "message": "Brak poprawnej kwoty we wniosku — nie można zaksięgować wydatku."}
+        
+        # E) Idempotencja — zabezpieczenie numer 1
+        if expense_id:
+            supabase.table("project_logs").update({
+                "status": PAYMENT_STATUS_PAID
+            }).eq("id", log_id).execute()
+            return {"status": "ok", "message": "Odbiór potwierdzony. Wydatek był już zaksięgowany."}
+        
+        # F) Idempotencja — zabezpieczenie numer 2
+        description = build_payment_expense_description(log_id, payment_type, note)
+        marker = f"[payment_request:{log_id}]"
+        
+        check_exp = supabase.table("expenses")\
+            .select("id, description, amount")\
+            .filter("description", "like", f"%{marker}%")\
+            .execute()
+        
+        existing_expenses = check_exp.data or []
+        if existing_expenses:
+            expense_id = existing_expenses[0]["id"]
+        else:
+            # G) Insert do expenses
+            from datetime import date
+            today_str = date.today().strftime("%Y-%m-%d")
+            
+            ins_exp = supabase.table("expenses").insert({
+                "description": description,
+                "amount": amount,
+                "quantity": 1,
+                "date": today_str
+            }).execute()
+            
+            if not ins_exp.data:
+                return {"status": "error", "message": "Nie udało się zapisać wydatku w bazie danych. Spróbuj ponownie."}
+            
+            expense_id = ins_exp.data[0]["id"]
+        
+        # H) Update project_logs
+        d["expense_id"] = str(expense_id)
+        d["received_at"] = datetime.now().isoformat()
+        d["paid_at"] = datetime.now().isoformat()
+        d["expense_description"] = description
+        
+        import json
+        supabase.table("project_logs").update({
+            "status": PAYMENT_STATUS_PAID,
+            "data": json.dumps(d)
+        }).eq("id", log_id).execute()
+        
+        return {"status": "ok", "message": "Odbiór środków potwierdzony i wydatek zaksięgowany."}
+    except Exception as e:
+        return {"status": "error", "message": f"Wystąpił nieoczekiwany błąd: {e}"}
+
+def approve_payment_request_by_investor(log_id, investor_note="", transfer_date=None):
+    """Inwestor zatwierdza wniosek finansowy i deklaruje wysłanie przelewu."""
+    try:
+        res = supabase.table("project_logs").select("id, status, data, description").eq("id", log_id).execute()
+        if not res.data:
+            return {"status": "error", "message": "Wniosek nie został znaleziony."}
+        
+        req = res.data[0]
+        if req.get("status") != PAYMENT_STATUS_SUBMITTED:
+            return {"status": "error", "message": "Ten wniosek nie oczekuje już na decyzję inwestora."}
+        
+        raw_data = req.get("data")
+        import json
+        d = {}
+        if isinstance(raw_data, dict):
+            d = raw_data
+        elif isinstance(raw_data, str):
+            try:
+                d = json.loads(raw_data)
+            except:
+                pass
+        
+        d["investor_note"] = investor_note
+        if transfer_date:
+            d["transfer_date"] = transfer_date.isoformat() if hasattr(transfer_date, "isoformat") else str(transfer_date)
+        d["approved_by_investor_at"] = datetime.now().isoformat()
+        
+        supabase.table("project_logs").update({
+            "status": PAYMENT_STATUS_APPROVED_BY_INVESTOR,
+            "data": json.dumps(d)
+        }).eq("id", log_id).execute()
+        
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "message": f"Błąd podczas zatwierdzania: {e}"}
+
+def reject_payment_request_by_investor(log_id, rejection_reason):
+    """Inwestor odrzuca wniosek finansowy z podaniem powodu."""
+    try:
+        if not rejection_reason or not rejection_reason.strip():
+            return {"status": "error", "message": "Powód odrzucenia jest wymagany."}
+            
+        res = supabase.table("project_logs").select("id, status, data, description").eq("id", log_id).execute()
+        if not res.data:
+            return {"status": "error", "message": "Wniosek nie został znaleziony."}
+        
+        req = res.data[0]
+        if req.get("status") != PAYMENT_STATUS_SUBMITTED:
+            return {"status": "error", "message": "Ten wniosek nie oczekuje już na decyzję inwestora."}
+        
+        raw_data = req.get("data")
+        import json
+        d = {}
+        if isinstance(raw_data, dict):
+            d = raw_data
+        elif isinstance(raw_data, str):
+            try:
+                d = json.loads(raw_data)
+            except:
+                pass
+        
+        d["rejection_reason"] = rejection_reason.strip()
+        d["rejected_at"] = datetime.now().isoformat()
+        
+        supabase.table("project_logs").update({
+            "status": PAYMENT_STATUS_REJECTED,
+            "data": json.dumps(d),
+            "description": rejection_reason.strip()
+        }).eq("id", log_id).execute()
+        
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "message": f"Błąd podczas odrzucania: {e}"}
 
 PAYMENT_RULES = {
     "limit_model": "HYBRID_50_100",
@@ -1225,7 +1784,8 @@ def calculate_hybrid_payment_limit(project_id):
         gross_limit = comp_val + capped_adv
         
         # Suma wypłat i oczekujących
-        logs = supabase.table("project_logs").select("*").eq("project_id", project_id).eq("type", "payment_request").execute().data or []
+        logs_raw = supabase.table("project_logs").select("*").eq("project_id", project_id).eq("type", PAYMENT_LOG_TYPE).execute().data or []
+        logs = [l for l in logs_raw if is_payment_request_log(l)]
         paid_pending = 0.0
         for l in logs:
             if l.get('status') not in ['REJECTED', 'CANCELLED']:
@@ -1520,10 +2080,26 @@ else:
 
     _chat_label = f"💬 Czat {'🔴' if _unread > 0 else ''}" + (f" ({_unread}nowych)" if _unread > 0 else "")
 
+    # Licznik oczekujących wniosków finansowych dla badge'a rozliczeń
+    try:
+        _p_meta_fin = get_project_metadata()
+        _p_id_fin = _p_meta_fin.get('id') if _p_meta_fin else None
+        if _p_id_fin:
+            _logs_raw_fin = supabase.table("project_logs").select("data").eq("project_id", _p_id_fin).eq("type", PAYMENT_LOG_TYPE).eq("status", PAYMENT_STATUS_SUBMITTED).execute().data or []
+            _pending_count = len([l for l in _logs_raw_fin if is_payment_request_log(l)])
+        else:
+            _pending_count = 0
+    except:
+        _pending_count = 0
+
+    _settlements_label = f"💰 Rozliczenia" + (f" 🔴 ({_pending_count})" if _pending_count > 0 else "")
+
     INVESTOR_PAGES = {
         "home":   "🏠 Mój Remont",
         "plan":   "📋 Plan & Postęp",
         "budget": "💰 Budżet",
+        "settlements": _settlements_label,
+        "crew_view": "👷 Zapotrzebowania Ekipy",
         "chat":   _chat_label,
         "logout": "🚪 Wyloguj"
     }
@@ -1590,7 +2166,10 @@ if st.session_state['role'] == "crew":
         </div>
         """, unsafe_allow_html=True)
         
-        tab_settlement, = st.tabs(["💸 ROZLICZENIE OKRESOWE (MODEL 50/100)"])
+        tab_settlement, tab_history = st.tabs([
+            "💸 ROZLICZENIE OKRESOWE (MODEL 50/100)",
+            "📜 STATUS I HISTORIA WNIOSKÓW"
+        ])
         
         with tab_settlement:
             st.subheader("Wniosek o wypłatę (Model Hybrydowy 50/100)")
@@ -1614,102 +2193,230 @@ if st.session_state['role'] == "crew":
             if fin.get('is_advance_capped'):
                 st.warning(f"⚠️ Zastosowano globalny limit zaliczek (30% budżetu). Część zaliczkowa została ograniczona.")
 
-            with st.form("payment_request_form_A_plus", clear_on_submit=True):
-                st.write("### 📤 Nowy wniosek")
-                req_amount = st.number_input("Kwota wniosku (PLN)", min_value=0.0, step=100.0, format="%.2f")
-                req_note = st.text_area("Uzasadnienie / Cel wypłaty", placeholder="Np. Zakup materiałów, rozliczenie etapu...")
-                
-                # --- WALIDACJA TWARDA (Zasada 8) ---
-                error_msg = None
-                can_submit = True
-                
-                if req_amount > fin['available']:
-                    error_msg = f"❌ Kwota przekracza limit ({money(fin['available'])})."
-                    can_submit = False
-                elif req_amount < PAYMENT_RULES["min_payment_request_amount"] and req_amount < fin['available'] and req_amount > 0:
-                    error_msg = f"❌ Minimalna kwota to {money(PAYMENT_RULES['min_payment_request_amount'])}."
-                    can_submit = False
-                elif req_amount <= 0:
-                    can_submit = False
-                
-                if error_msg: st.error(error_msg)
-                
-                if st.form_submit_button("Wyślij wniosek do Inwestora", type="primary", disabled=not can_submit):
-                    # --- STRAŻNIK OSTATNIEJ SEKUNDY (Opcja 2 - Backend Validation) ---
-                    # Przeliczamy limit jeszcze raz, tuż przed zapisem do bazy
-                    fresh_fin = calculate_hybrid_payment_limit(p_id)
+            col_payout, col_reimb = st.columns(2)
+            
+            with col_payout:
+                with st.form("payment_request_form_A_plus", clear_on_submit=True):
+                    st.write("### 📤 Nowy wniosek")
+                    raw_req_amount = st.text_input("Kwota wniosku (PLN)", value="0,00")
+                    req_note = st.text_area("Uzasadnienie / Cel wypłaty", placeholder="Np. Zakup materiałów, rozliczenie etapu...")
                     
-                    if req_amount > fresh_fin['available']:
-                        st.error(f"⚠️ Limit właśnie się zmienił! Aktualnie dostępne: {money(fresh_fin['available'])}. Spróbuj ponownie.")
-                    else:
-                        import json
-                        payment_type = classify_payment_request(fresh_fin)
-                        snapshot = build_payment_limit_snapshot(fresh_fin)
-                        
-                        log_data = {
-                            "amount": req_amount,
-                            "note": req_note,
-                            "payment_type": payment_type,
-                            "limit_snapshot": snapshot,
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        
-                        # Zapisujemy jako wniosek o płatność
-                        u_id = st.session_state.get('user_id')
-                        supabase.table("project_logs").insert({
-                            "project_id": p_id,
-                            "user_id": u_id,
-                            "created_by": u_id,
-                            "type": "payment_request",
-                            "title": f"Wniosek ({payment_type}): {money(req_amount)}",
-                            "description": req_note,
-                            "data": json.dumps(log_data),
-                            "status": "SUBMITTED"
-                        }).execute()
-                        
-                        # Dodatkowy log audytowy
-                        add_activity_log("Karol", "FINANCIAL", p_id, f"Złożono wniosek {payment_type} na kwotę {money(req_amount)}")
-                        
-                        st.success("✅ Wniosek wysłany!")
-                        time.sleep(1)
-                        st.rerun()
+                    if st.form_submit_button("Wyślij wniosek do Inwestora", type="primary"):
+                        req_amount, err = parse_pln_amount(raw_req_amount)
+                        if err:
+                            st.error(f"❌ {err}")
+                        elif req_amount <= 0:
+                            st.error("❌ Kwota wniosku musi być większa niż 0.")
+                        else:
+                            fresh_fin = calculate_hybrid_payment_limit(p_id)
+                            if req_amount > fresh_fin['available']:
+                                st.error(f"❌ Kwota przekracza aktualny dostępny limit ({money(fresh_fin['available'])}).")
+                            elif req_amount < PAYMENT_RULES["min_payment_request_amount"] and req_amount < fresh_fin['available']:
+                                st.error(f"❌ Minimalna kwota wniosku to {money(PAYMENT_RULES['min_payment_request_amount'])}.")
+                            else:
+                                import json
+                                payment_type = classify_payment_request(fresh_fin)
+                                snapshot = build_payment_limit_snapshot(fresh_fin)
+                                
+                                u_id = st.session_state.get('user_id')
+                                log_data = {
+                                    "amount": req_amount,
+                                    "note": req_note,
+                                    "payment_type": payment_type,
+                                    "limit_snapshot": snapshot,
+                                    "timestamp": datetime.now().isoformat(),
+                                    "created_by_id": u_id,
+                                    "reported_by": st.session_state.get("user_name", "Ekipa")
+                                }
+                                
+                                supabase.table("project_logs").insert({
+                                    "project_id": p_id,
+                                    "type": PAYMENT_LOG_TYPE,
+                                    "title": f"Wniosek ({payment_type}): {money(req_amount)}",
+                                    "description": req_note,
+                                    "data": json.dumps(log_data),
+                                    "status": PAYMENT_STATUS_SUBMITTED
+                                }).execute()
+                                
+                                add_activity_log(
+                                    st.session_state.get("user_name", "Ekipa"), 
+                                    "FINANCIAL", 
+                                    p_id, 
+                                    f"Złożono wniosek {payment_type} na kwotę {money(req_amount)}"
+                                )
+                                
+                                st.success("✅ Wniosek wysłany do Inwestora. Status możesz śledzić w zakładce historii.")
+                                time.sleep(1.5)
+                                st.rerun()
 
-            st.divider()
-            with st.form("material_reimbursement_form", clear_on_submit=True):
-                st.write("### 🛒 Zwrot za materiały")
-                st.caption("Użyj tego formularza, jeśli kupiłeś materiały za własne pieniądze.")
-                reimb_amount = st.number_input("Kwota z paragonu/faktury (PLN)", min_value=0.0, step=10.0)
-                reimb_note = st.text_input("Na co wydano? (krótki opis)")
-                
-                if st.form_submit_button("Zgłoś wydatek do zwrotu"):
-                    if reimb_amount > 0 and reimb_note:
-                        import json
-                        log_data = {
-                            "amount": reimb_amount,
-                            "note": reimb_note,
-                            "payment_type": "REIMBURSEMENT",
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        u_id = st.session_state.get('user_id')
-                        supabase.table("project_logs").insert({
-                            "project_id": p_id,
-                            "user_id": u_id,
-                            "created_by": u_id,
-                            "type": "payment_request",
-                            "title": f"Zwrot za materiały: {money(reimb_amount)}",
-                            "description": reimb_note,
-                            "data": json.dumps(log_data),
-                            "status": "SUBMITTED"
-                        }).execute()
-                        add_activity_log("Karol", "FINANCIAL", p_id, f"Zgłoszono zwrot za materiały: {money(reimb_amount)}")
-                        st.success("✅ Zgłoszono!")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Podaj kwotę i opis zakupów.")
+            with col_reimb:
+                with st.form("material_reimbursement_form", clear_on_submit=True):
+                    st.write("### 🛒 Zwrot za materiały")
+                    st.caption("Użyj tego formularza, jeśli kupiłeś materiały za własne pieniądze.")
+                    raw_reimb_amount = st.text_input("Kwota z paragonu/faktury (PLN)", value="0,00")
+                    reimb_note = st.text_input("Na co wydano? (krótki opis)")
+                    
+                    if st.form_submit_button("Zgłoś wydatek do zwrotu", type="primary"):
+                        reimb_amount, err = parse_pln_amount(raw_reimb_amount)
+                        if err:
+                            st.error(f"❌ {err}")
+                        elif reimb_amount <= 0:
+                            st.error("❌ Kwota musi być większa niż 0.")
+                        elif not reimb_note.strip():
+                            st.error("❌ Podaj na co wydano pieniądze (krótki opis).")
+                        else:
+                            import json
+                            u_id = st.session_state.get('user_id')
+                            log_data = {
+                                "amount": reimb_amount,
+                                "note": reimb_note.strip(),
+                                "payment_type": "REIMBURSEMENT",
+                                "timestamp": datetime.now().isoformat(),
+                                "created_by_id": u_id,
+                                "reported_by": st.session_state.get("user_name", "Ekipa")
+                            }
+                            supabase.table("project_logs").insert({
+                                "project_id": p_id,
+                                "type": PAYMENT_LOG_TYPE,
+                                "title": f"Zwrot za materiały: {money(reimb_amount)}",
+                                "description": reimb_note.strip(),
+                                "data": json.dumps(log_data),
+                                "status": PAYMENT_STATUS_SUBMITTED
+                            }).execute()
+                            
+                            add_activity_log(
+                                st.session_state.get("user_name", "Ekipa"), 
+                                "FINANCIAL", 
+                                p_id, 
+                                f"Zgłoszono zwrot za materiały: {money(reimb_amount)}"
+                            )
+                            
+                            st.success("✅ Wniosek o zwrot wysłany do Inwestora. Status możesz śledzić w historii.")
+                            time.sleep(1.5)
+                            st.rerun()
 
-            st.divider()
             st.caption("ℹ️ Model Hybrydowy 50/100: 100% DONE | 50% TODO/IN_PROGRESS | 0% BLOCKED | Global Cap 30%.")
+
+        with tab_history:
+            st.markdown("## 📜 Status i historia wniosków")
+            
+            try:
+                logs_resp = supabase.table("project_logs")\
+                    .select("id, title, description, status, data, created_at, type, is_deleted")\
+                    .eq("project_id", p_id)\
+                    .eq("type", PAYMENT_LOG_TYPE)\
+                    .execute()
+                
+                reqs_history = logs_resp.data or []
+                reqs_history = [r for r in reqs_history if not r.get("is_deleted") and is_payment_request_log(r)]
+                reqs_history.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            except Exception as e:
+                st.error(f"⚠️ Błąd pobierania historii wniosków: {e}")
+                reqs_history = []
+                
+            aktywne_requests = []
+            zamkniete_requests = []
+            odrzucone_requests = []
+            
+            for r in reqs_history:
+                status = r.get("status", PAYMENT_STATUS_SUBMITTED)
+                if status in PAYMENT_OPEN_STATUSES:
+                    aktywne_requests.append(r)
+                elif status in [PAYMENT_STATUS_PAID, PAYMENT_LEGACY_APPROVED]:
+                    zamkniete_requests.append(r)
+                elif status == PAYMENT_STATUS_REJECTED:
+                    odrzucone_requests.append(r)
+                else:
+                    aktywne_requests.append(r)
+                    
+            def render_crew_payment_item(req, key_prefix="crew_payment"):
+                raw_data = req.get("data")
+                import json
+                d = {}
+                if isinstance(raw_data, dict):
+                    d = raw_data
+                elif isinstance(raw_data, str):
+                    try:
+                        d = json.loads(raw_data)
+                    except:
+                        pass
+                
+                amount = safe_float(d.get("amount", 0.0))
+                p_type = d.get("payment_type", "UNKNOWN")
+                note = d.get("note") or req.get("description") or "Brak opisu"
+                created_at = req.get("created_at", "")[:16].replace("T", " ")
+                status = req.get("status", PAYMENT_STATUS_SUBMITTED)
+                
+                with st.container(border=True):
+                    col_det, col_stat = st.columns([3, 1])
+                    
+                    with col_det:
+                        st.markdown(f"### {money(amount)}")
+                        st.markdown(f"**Typ:** {get_payment_type_label(p_type)}")
+                        st.markdown(f"📝 **Opis:** {note}")
+                        st.caption(f"📅 Zgłoszono: {created_at}")
+                        
+                        if d.get("investor_note"):
+                            st.info(f"💬 **Notatka Inwestora:** {d.get('investor_note')}")
+                        if d.get("rejection_reason") or (status == PAYMENT_STATUS_REJECTED and req.get("description")):
+                            reason = d.get("rejection_reason") or req.get("description")
+                            st.error(f"❌ **Powób odrzucenia:** {reason}")
+                        if d.get("transfer_date"):
+                            st.info(f"📅 **Data przelewu:** {d.get('transfer_date')}")
+                        if d.get("expense_id"):
+                            st.markdown("✅ **Zaksięgowano w kosztach remontu**")
+                            
+                    with col_stat:
+                        st.markdown(f"**Status:**")
+                        st.markdown(f"#### {get_payment_status_label(status)}")
+                        st.markdown("**Kolejny krok:**")
+                        st.caption(get_payment_next_action_label(status))
+                        
+                if status == PAYMENT_STATUS_APPROVED_BY_INVESTOR:
+                    st.info("💡 **Przelew został zadeklarowany przez Inwestora.** Gdy środki dotrą na konto bankowe, potwierdź odbiór poniższym przyciskiem.")
+                    if st.button("📥 Potwierdzam odbiór środków", key=f"{key_prefix}_confirm_received_{req['id']}", use_container_width=True, type="primary"):
+                        res = confirm_payment_received_by_crew(req['id'])
+                        if res["status"] == "ok":
+                            st.success(f"✅ {res['message']}")
+                            time.sleep(1.5)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {res['message']}")
+                        
+            if not reqs_history:
+                st.info("Nie masz jeszcze żadnych wniosków finansowych.")
+            else:
+                t_act, t_sett, t_rej, t_all = st.tabs([
+                    f"⏳ Aktywne ({len(aktywne_requests)})", 
+                    f"✅ Rozliczone ({len(zamkniete_requests)})", 
+                    f"❌ Odrzucone ({len(odrzucone_requests)})", 
+                    f"📋 Wszystkie ({len(reqs_history)})"
+                ])
+                
+                with t_act:
+                    if aktywne_requests:
+                        for r in aktywne_requests:
+                            render_crew_payment_item(r, key_prefix="crew_active")
+                    else:
+                        st.info("Brak aktywnych wniosków.")
+                        
+                with t_sett:
+                    if zamkniete_requests:
+                        for r in zamkniete_requests:
+                            render_crew_payment_item(r, key_prefix="crew_settled")
+                    else:
+                        st.info("Brak rozliczonych wniosków.")
+                        
+                with t_rej:
+                    if odrzucone_requests:
+                        for r in odrzucone_requests:
+                            render_crew_payment_item(r, key_prefix="crew_rejected")
+                    else:
+                        st.info("Brak odrzuconych wniosków.")
+                        
+                with t_all:
+                    for r in reqs_history:
+                        render_crew_payment_item(r, key_prefix="crew_all")
             
         st.stop()
 
@@ -1721,7 +2428,7 @@ if st.session_state['role'] == "crew":
         st.stop()
         
     elif menu == "🚨 Blokady i Materiały":
-        st.title("🚨 Zgłoś problem")
+        render_crew_blockers_materials_panel()
         st.stop()
 
     elif menu == "💬 Czat Budowy" or menu == "chat":
@@ -1892,6 +2599,8 @@ if menu == "home" or menu == "investor_2_0":
         st.stop()
 
     # GŁÓWNY DASHBOARD INWESTORA
+    if _pending_count > 0:
+        st.warning(f"🚨 **Masz aktywne wnioski finansowe do obsługi ({_pending_count}).** Przejdź do zakładki: **💰 Rozliczenia** w menu bocznym, aby podjąć decyzję.")
     render_investor_panel(supabase, phase_service, negotiation_service, change_service, task_service, timeline_service, ordering_service)
 
 elif menu == "chat":
@@ -2111,7 +2820,7 @@ elif menu == "dashboard_view":
                 render_comment_section(task['id'], "investor")
                 
                 # Zgłoszenia materiałowe powiązane z tym zadaniem
-                linked_reqs = [r for r in (crew_grouped.get("Nowe", []) + crew_grouped.get("Potwierdzone", [])) if r.get("linked_task_id") == task["id"]]
+                linked_reqs = [r for r in (crew_grouped.get("Nowe", []) + crew_grouped.get("Potwierdzone", [])) if r.get("task_id") == task["id"]]
                 for req in linked_reqs:
                     st.write(f"📦 **{req['title']}** — status: {req['status']}")
                     if req["status"] == "Potwierdzone":
@@ -2395,7 +3104,7 @@ elif menu == "inspections":
 
 elif menu == "crew_view":
     st.title("👷 Zapotrzebowania Ekipy")
-    st.caption("Karol zgłasza czego potrzebuje. Potwierdź, że się tym zajmujesz i oznacz jako dostarczone.")
+    st.caption("Ekipa zgłasza swoje zapotrzebowania oraz napotkane problemy. Potwierdź chęć pomocy lub oznacz sprawy jako dostarczone / rozwiązane.")
 
     grouped = get_crew_requests_grouped()
 
@@ -2406,8 +3115,8 @@ elif menu == "crew_view":
     # --- KPI ---
     k1, k2, k3 = st.columns(3)
     k1.metric("🔴 Nowe zgłoszenia", len(nowe))
-    k2.metric("🟡 W toku (potwierdzone)", len(potwierdzone))
-    k3.metric("🟢 Dostarczone", len(dostarczone))
+    k2.metric("🟡 W toku (podjęte działanie)", len(potwierdzone))
+    k3.metric("🟢 Dostarczone / rozwiązane", len(dostarczone))
     st.divider()
 
     # --- NOWE ---
@@ -2426,22 +3135,23 @@ elif menu == "crew_view":
                         note = st.text_input("Twoja notatka (opcjonalnie)", placeholder="np. Zamówiłem, dostawa czwartek", key=f"note_{req['id']}")
                         delivery = st.date_input("Szacowana dostawa", key=f"del_{req['id']}")
                         c1, c2 = st.columns(2)
-                        if c1.form_submit_button("✅ POTWIERDŹ", width="stretch", type="primary"):
+                        if c1.form_submit_button("✅ Potwierdzam — zajmuję się tym", width="stretch", type="primary"):
                             confirm_crew_request(req['id'], note, delivery)
                             st.rerun()
-                        if c2.form_submit_button("❌ ANULUJ", width="stretch"):
+                        if c2.form_submit_button("❌ Anuluj zgłoszenie", width="stretch"):
                             cancel_crew_request(req['id'])
                             st.rerun()
+                    st.caption("ℹ️ *Potwierdzenie da znać ekipie, że pracujesz nad sprawą. Anulowanie zamknie zgłoszenie i odblokuje powiązane zadanie (jeśli nie ma innych blokad).*")
     else:
         st.success("✅ Brak nowych zgłoszeń!")
 
     # --- POTWIERDZONE ---
     if potwierdzone:
         st.divider()
-        st.subheader(f"🟡 W toku — czekają na dostawę ({len(potwierdzone)})")
+        st.subheader(f"🟡 W toku — w trakcie dostawy lub rozwiązywania ({len(potwierdzone)})")
         for req in potwierdzone:
             with st.container(border=True):
-                col_info, col_btn = st.columns([3, 1])
+                col_info, col_btn = st.columns([3, 1.5])
                 with col_info:
                     st.markdown(f"**{req['title']}**")
                     if req.get("investor_note"):
@@ -2449,15 +3159,16 @@ elif menu == "crew_view":
                     if req.get("expected_delivery_date"):
                         st.caption(f"📅 Szacowana dostawa: {req['expected_delivery_date']}")
                 with col_btn:
-                    if st.button("📦 DOSTARCZONE", key=f"del_btn_{req['id']}", width="stretch", type="primary"):
+                    if st.button("📦 Dostarczone / rozwiązane", key=f"del_btn_{req['id']}", width="stretch", type="primary"):
                         mark_crew_request_delivered(req['id'])
                         st.rerun()
+                    st.caption("ℹ️ *Kliknięcie automatycznie odblokuje zadanie w Kanbanie, jeśli nie ma innych aktywnych blokad.*")
 
     # --- DOSTARCZONE (Historia) ---
     if dostarczone:
-        with st.expander(f"📜 Historia dostarczonych ({len(dostarczone)})"):
+        with st.expander(f"📜 Historia dostarczonych / rozwiązanych ({len(dostarczone)})"):
             for req in dostarczone:
-                st.caption(f"✅ {req['title']} — dostarczone {str(req.get('delivered_at',''))[:10]}")
+                st.caption(f"✅ {req['title']} — Dostarczone / rozwiązane")
 
 
 # ==========================================
@@ -2488,7 +3199,8 @@ elif menu == "journal":
 
     tab_dec, tab_iss = st.tabs(["📝 Decyzje", "⚠️ Problemy"])
     with tab_dec:
-        recs = supabase.table("project_logs").select("*").eq("type", "DECISION").execute().data or []
+        recs_raw = supabase.table("project_logs").select("*").eq("type", "DECISION").execute().data or []
+        recs = [r for r in recs_raw if not is_payment_request_log(r)]
         if recs:
             df = pd.DataFrame(recs)
             ed = st.data_editor(df[['id', 'title', 'status', 'due_date', 'result']], key="ed_dec", width="stretch")
@@ -2533,23 +3245,44 @@ elif menu == "settlements":
     st.title("💰 Centrum Rozliczeń Finansowych")
     st.caption("Zatwierdzaj wypłaty dla ekipy na podstawie modelu 50/100 i postępów prac.")
     
-    # --- DEBUG PANEL (Zasada 1) ---
-    with st.expander("🛠️ DEBUG: Szczegóły Kalkulatora 50/100 (Tylko dla Inwestora)"):
-        debug_fin = calculate_hybrid_payment_limit(project_meta['id'])
-        st.json(debug_fin)
+    # --- DANE FINANSOWE & PROGNOZY ---
+    limit_res = calculate_hybrid_payment_limit(project_meta['id'])
+    
+    # Render professional financial status panel
+    with st.container(border=True):
+        st.write("### 📊 Status Finansowy Projektu")
+        st.caption("Podsumowanie limitów wypłat w oparciu o postęp prac i model rozliczeniowy 50/100.")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("💰 Dostępny limit wypłat", money(limit_res.get("available", 0.0)))
+        c2.metric("💳 Wypłacone / Oczekujące", money(limit_res.get("already_paid", 0.0)))
+        c3.metric("🏠 Budżet projektu", money(limit_res.get("budget", 0.0)))
+        
+    # --- DEBUG PANEL (Zasada 1 - Tylko jeśli włączony w Secrets) ---
+    show_finance_debug = False
+    try:
+        show_finance_debug = bool(st.secrets.get("SHOW_FINANCE_DEBUG", False))
+    except Exception:
+        pass
+        
+    if show_finance_debug:
+        with st.expander("🛠️ DEBUG: Szczegóły Kalkulatora 50/100 (Tylko dla Inwestora)"):
+            st.json(limit_res)
     
     # Pobieramy wnioski o płatność
     try:
         p_id = project_meta.get('id')
-        reqs_all = supabase.table("project_logs").select("*").eq("project_id", p_id).eq("type", "payment_request").order("created_at", desc=True).execute().data or []
-        pending_requests = [r for r in reqs_all if r.get('status') == 'SUBMITTED']
-        history_requests = [r for r in reqs_all if r.get('status') != 'SUBMITTED']
+        reqs_raw = supabase.table("project_logs").select("*").eq("project_id", p_id).eq("type", PAYMENT_LOG_TYPE).order("created_at", desc=True).execute().data or []
+        reqs_all = [r for r in reqs_raw if is_payment_request_log(r)]
+        pending_requests = [r for r in reqs_all if r.get('status') == PAYMENT_STATUS_SUBMITTED]
+        declared_requests = [r for r in reqs_all if r.get('status') == PAYMENT_STATUS_APPROVED_BY_INVESTOR]
+        history_requests = [r for r in reqs_all if r.get('status') not in PAYMENT_OPEN_STATUSES]
     except Exception as e:
         st.error(f"⚠️ Błąd dostępu do bazy: {e}")
-        pending_requests, history_requests = [], []
+        pending_requests, declared_requests, history_requests = [], [], []
     
+    # A) Wnioski oczekujące na decyzję (SUBMITTED)
     if not pending_requests:
-        st.success("✅ Wszystkie wnioski zostały przetworzone.")
+        st.success("✅ Wszystkie wnioski oczekujące zostały przetworzone.")
     else:
         st.write(f"### Oczekujące wnioski ({len(pending_requests)})")
         for req in pending_requests:
@@ -2567,15 +3300,12 @@ elif menu == "settlements":
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     st.subheader(f"Wniosek: {money(req_amount)}")
-                    
-                    # Badge typu
-                    if req_type == "ADVANCE": st.warning("💸 Typ: ZALICZKA (Prace w toku)")
-                    elif req_type == "FINAL": st.success("✅ Typ: ROZLICZENIE KOŃCOWE (Prace DONE)")
-                    elif req_type == "REIMBURSEMENT": st.error("🛒 Typ: ZWROT ZA MATERIAŁY (Wydatki własne)")
-                    else: st.info("🔀 Typ: MIESZANY (Zaliczka + Prace DONE)")
-                    
-                    st.write(f"📅 Data: {req['created_at'][:10]} | Autor: **Karol**")
+                    st.markdown(f"**Typ:** {get_payment_type_label(req_type)}")
+                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]} | Autor: **Karol**")
                     if req_note: st.info(f"📝 Uzasadnienie: {req_note}")
+                    
+                    st.markdown(f"**Status:** {get_payment_status_label(req.get('status'))}")
+                    st.caption(f"**Kolejny krok:** {get_payment_next_action_label(req.get('status'))}")
                     
                     if snapshot:
                         with st.expander("📊 SZCZEGÓŁY LIMITU 50/100 (Snapshot)"):
@@ -2588,27 +3318,102 @@ elif menu == "settlements":
                 
                 with col2:
                     st.write("### Decyzja")
-                    if st.button("✅ ZATWIERDŹ", key=f"app_req_A_{req['id']}", use_container_width=True, type="primary"):
-                        supabase.table("project_logs").update({"status": "APPROVED"}).eq("id", req['id']).execute()
-                        add_activity_log("Inwestor", "FINANCIAL", p_id, f"ZATWIERDZONO wypłatę {req_type}: {money(req_amount)}")
-                        st.success("Zatwierdzono!")
-                        time.sleep(1)
-                        st.rerun()
                     
-                    if st.button("❌ ODRZUĆ", key=f"rej_req_A_{req['id']}", use_container_width=True):
-                        reason = st.text_input("Powód odrzucenia", key=f"rej_reason_{req['id']}")
-                        if st.button("Potwierdź odrzucenie", key=f"rej_conf_{req['id']}"):
-                            supabase.table("project_logs").update({"status": "REJECTED", "description": reason}).eq("id", req['id']).execute()
-                            add_activity_log("Inwestor", "FINANCIAL", p_id, f"ODRZUCONO wniosek: {money(req_amount)}. Powód: {reason}")
-                            st.warning("Odrzucono.")
+                    inv_note = st.text_input("Notatka dla Ekipy (opcjonalnie)", key=f"inv_note_{req['id']}")
+                    trans_date = st.date_input("Planowana data przelewu", value=date.today(), key=f"trans_d_{req['id']}")
+                    
+                    if st.button("✅ Zatwierdź i zadeklaruj przelew", key=f"app_req_A_{req['id']}", use_container_width=True, type="primary"):
+                        res = approve_payment_request_by_investor(req['id'], inv_note, trans_date)
+                        if res['status'] == 'ok':
+                            add_activity_log("Inwestor", "FINANCIAL", p_id, f"Zatwierdzono wniosek {req_type}: {money(req_amount)}")
+                            st.success("✅ Zatwierdzono! Ekipa została powiadomiona o przelewie.")
+                            time.sleep(1.5)
                             st.rerun()
+                        else:
+                            st.error(f"❌ {res['message']}")
+                    
+                    st.write("---")
+                    with st.expander("❌ Odrzuć wniosek"):
+                        rej_reason = st.text_input("Powód odrzucenia (wymagany)", key=f"rej_reason_{req['id']}")
+                        if st.button("Potwierdź odrzucenie", key=f"rej_conf_{req['id']}", use_container_width=True):
+                            if not rej_reason.strip():
+                                st.error("❌ Musisz podać powód odrzucenia.")
+                            else:
+                                res = reject_payment_request_by_investor(req['id'], rej_reason)
+                                if res['status'] == 'ok':
+                                    add_activity_log("Inwestor", "FINANCIAL", p_id, f"Odrzucono wniosek {req_type}: {money(req_amount)}. Powód: {rej_reason}")
+                                    st.warning("⚠️ Wniosek odrzucony.")
+                                    time.sleep(1.5)
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ {res['message']}")
 
+    # B) Wnioski zatwierdzone przez Inwestora (APPROVED_BY_INVESTOR) — oczekujące na Ekipę
+    if declared_requests:
+        st.write("---")
+        st.write(f"### 💰 Zadeklarowane przelewy — Oczekiwanie na ruch Ekipy ({len(declared_requests)})")
+        for req in declared_requests:
+            import json
+            try:
+                d = json.loads(req.get('data', '{}'))
+                req_amount = safe_float(d.get('amount'))
+                req_type = d.get('payment_type', 'UNKNOWN')
+                req_note = d.get('note', '')
+                inv_note = d.get('investor_note', '')
+                trans_date = d.get('transfer_date', '')
+            except:
+                req_amount, req_type, req_note, inv_note, trans_date = 0.0, 'UNKNOWN', req.get('description', ''), '', ''
+
+            with st.container(border=True):
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.subheader(f"Wniosek: {money(req_amount)}")
+                    st.markdown(f"**Typ:** {get_payment_type_label(req_type)}")
+                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]} | Autor: **Karol**")
+                    if req_note: st.info(f"📝 Uzasadnienie Ekipy: {req_note}")
+                    if inv_note: st.success(f"💬 Twoja notatka: {inv_note}")
+                    if trans_date: st.write(f"📅 Zadeklarowana data przelewu: **{trans_date}**")
+                
+                with col2:
+                    st.markdown(f"**Status:** {get_payment_status_label(req.get('status'))}")
+                    st.caption(f"**Kolejny krok:** {get_payment_next_action_label(req.get('status'))}")
+
+    # C) Archiwum rozliczeń (PAID, APPROVED, REJECTED)
     if history_requests:
-        with st.expander(f"📜 Historia rozliczeń ({len(history_requests)})"):
+        st.write("---")
+        with st.expander(f"📜 Historia rozliczeń ({len(history_requests)})", expanded=False):
             for h in history_requests:
-                status_color = "green" if h['status'] == "APPROVED" else "red"
-                st.write(f":{status_color}[{h['status']}] **{h['title']}** — {h['created_at'][:10]}")
-                if h.get('description'): st.caption(f"Komentarz: {h['description']}")
+                status = h.get('status', 'APPROVED')
+                
+                raw_data = h.get('data')
+                import json
+                d = {}
+                if isinstance(raw_data, dict):
+                    d = raw_data
+                elif isinstance(raw_data, str):
+                    try:
+                        d = json.loads(raw_data)
+                    except:
+                        pass
+                
+                amount = safe_float(d.get('amount')) if d else 0.0
+                p_type = d.get('payment_type', 'UNKNOWN') if d else 'UNKNOWN'
+                note = d.get('note') or h.get('description') or 'Brak opisu'
+                
+                status_label = get_payment_status_label(status)
+                
+                with st.container(border=True):
+                    sc1, sc2 = st.columns([3, 1])
+                    with sc1:
+                        st.markdown(f"#### {money(amount)} — {get_payment_type_label(p_type)}")
+                        st.write(f"📅 Data: {h['created_at'][:10]} | Opis: {note}")
+                        if d.get('investor_note'):
+                            st.caption(f"Komentarz Inwestora: {d.get('investor_note')}")
+                        if d.get('rejection_reason') or (status == PAYMENT_STATUS_REJECTED and h.get('description')):
+                            reason = d.get('rejection_reason') or h.get('description')
+                            st.caption(f"Powód odrzucenia: {reason}")
+                    with sc2:
+                        st.write(f"Status: **{status_label}**")
 
 elif menu == "negotiations":
     st.title("🤝 Centrum Negocjacji i Handshake")
