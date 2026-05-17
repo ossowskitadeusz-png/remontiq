@@ -1888,7 +1888,8 @@ if menu == "home" or menu == "investor_2_0":
         else:
             st.info("Wybierz przynajmniej jedno pomieszczenie.")
 
-        if st.button("✅ GOTOWE – Wyślij Karolowi do wyceny →", use_container_width=True, type="primary", disabled=not selected_rooms):
+        crew_lead = project_meta.get('crew_lead_name', 'Ekipa') if project_meta else 'Ekipa'
+        if st.button(f"✅ GOTOWE – Wyślij do wyceny ({crew_lead}) →", use_container_width=True, type="primary", disabled=not selected_rooms):
             if p_id and selected_rooms:
                 for room_name in selected_rooms:
                     try:
@@ -1897,7 +1898,7 @@ if menu == "home" or menu == "investor_2_0":
                         pass
                 st.session_state.pop('wizard_step', None)
                 st.session_state.pop('wizard_rooms', None)
-                st.success("🎉 Projekt skonfigurowany! Karol może teraz budować plan remontu.")
+                st.success(f"🎉 Projekt skonfigurowany! {crew_lead} może teraz budować plan remontu.")
                 st.rerun()
         st.stop()
 

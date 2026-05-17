@@ -57,6 +57,8 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     
     # 2. DASHBOARD - METRYKI
     project_data = supabase.table("project_metadata").select("*").eq("id", selected_project_id).single().execute().data
+    crew_name = project_data.get("crew_lead_name") or "Ekipa"
+    
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
@@ -97,7 +99,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
             st.info("✅ Nie masz żadnych propozycji do rozpatrzenia.")
         else:
             for idx, neg in enumerate(pending_negs):
-                render_negotiation_card(neg, negotiation_service, key_suffix=f"investor_{idx}")
+                render_negotiation_card(neg, negotiation_service, crew_name=crew_name, key_suffix=f"investor_{idx}")
                 
         st.markdown("---")
         st.subheader("✅ Zatwierdzone Negocjacje")
@@ -138,7 +140,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
 
     with tab_rooms:
         st.subheader("🏠 Podziel mieszkanie na poszczólne pomieszczenia")
-        st.write("Wpisz tu pokoje, z których Karol będzie mógł budować swój harmonogram.")
+        st.write(f"Wpisz tu pokoje, z których {crew_name} będzie mógł budować swój harmonogram.")
 
         # Dodawanie nowego pomieszczenia
         with st.form("add_room_form_center", clear_on_submit=True):
@@ -177,7 +179,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                             .eq("project_id", selected_project_id)\
                             .eq("phase_name", old_name).execute()
                         updated += 1
-                st.success(f"✅ Zapisano! Zaktualizowano {updated} pomieszczeń również w planie Karola.")
+                st.success(f"✅ Zapisano! Zaktualizowano {updated} pomieszczeń również w planie ekipy ({crew_name}).")
                 st.rerun()
         else:
             st.info("📦 Brak pokójów. Dodaj pierwsze pomieszczenie powyżej.")
@@ -186,7 +188,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
 # KOMPONENTY
 # =====================================================
 
-def render_negotiation_card(neg, negotiation_service, key_suffix=""):
+def render_negotiation_card(neg, negotiation_service, crew_name="Ekipa", key_suffix=""):
     neg_id = neg['id']
     task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')
     
@@ -198,7 +200,7 @@ def render_negotiation_card(neg, negotiation_service, key_suffix=""):
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("OFERTA KAROLA", f"{neg['proposed_price']:,.0f} zł")
+            st.metric(f"OFERTA ({crew_name.upper()})", f"{neg['proposed_price']:,.0f} zł")
         with col2:
             if neg.get('response_price'):
                 st.warning(f"TWOJA KONTRA: {neg['response_price']:,.0f} zł")
@@ -206,7 +208,7 @@ def render_negotiation_card(neg, negotiation_service, key_suffix=""):
             st.metric("Czas realizacji", f"{neg.get('proposed_duration_days', '?')} dni")
             
         if neg.get('proposed_notes'):
-            st.info(f"👷 **Wiadomość od Karola:** {neg['proposed_notes']}")
+            st.info(f"👷 **Wiadomość ({crew_name}):** {neg['proposed_notes']}")
 
         st.markdown("---")
         b1, b2, b3 = st.columns(3)
