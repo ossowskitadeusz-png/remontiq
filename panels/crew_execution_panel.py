@@ -60,7 +60,6 @@ def render_crew_execution_panel(supabase, task_service):
                         # Zapisujemy daty startu i planowanego końca
                         payload = {
                             "kanban_status": "IN_PROGRESS", 
-                            "state": "IN_PROGRESS",
                             "actual_start_date": datetime.now().date().isoformat(),
                             "planned_end_date": end_date.isoformat()
                         }
@@ -80,14 +79,13 @@ def render_crew_execution_panel(supabase, task_service):
                         # Zmieniamy na AWAITING_INSPECTION zamiast zwykłego DONE
                         payload = {
                             "kanban_status": "AWAITING_INSPECTION", 
-                            "state": "COMPLETED",
                             "actual_end_date": datetime.now().date().isoformat()
                         }
                         task_service.update_task(t['id'], payload)
                         st.rerun()
                 with col_btn2:
                     if st.button("🔙 Cofnij", key=f"back_{t['id']}", use_container_width=True):
-                        task_service.update_task(t['id'], {"kanban_status": "TODO", "state": "DRAFT", "actual_start_date": None})
+                        task_service.update_task(t['id'], {"kanban_status": "TODO", "actual_start_date": None})
                         st.rerun()
 
     with c3:
@@ -101,5 +99,5 @@ def render_crew_execution_panel(supabase, task_service):
                     st.success("✅ Odebrane przez Inwestora")
                 
                 if st.button("🔙 Przywróć", key=f"revert_{t['id']}", use_container_width=True):
-                    task_service.update_task(t['id'], {"kanban_status": "IN_PROGRESS", "state": "IN_PROGRESS", "actual_end_date": None})
+                    task_service.update_task(t['id'], {"kanban_status": "IN_PROGRESS", "actual_end_date": None})
                     st.rerun()

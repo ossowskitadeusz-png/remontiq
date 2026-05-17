@@ -216,7 +216,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                     with col_action:
                         if st.button("✅ ZATWIERDŹ ODBIÓR", key=f"insp_{t['id']}", type="primary", use_container_width=True):
                             # Zmieniamy status zadania na zarchiwizowane/finalnie odebrane
-                            task_service.update_task(t['id'], {"kanban_status": "DONE", "state": "ARCHIVED", "completion_status": "Zatwierdzone", "actual_end_date": datetime.now().date().isoformat()})
+                            task_service.update_task(t['id'], {"kanban_status": "DONE", "completion_status": "Zatwierdzone", "actual_end_date": datetime.now().date().isoformat()})
                             st.success("Odebrano pomyślnie!")
                             st.rerun()
 
