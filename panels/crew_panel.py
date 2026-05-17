@@ -80,9 +80,8 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     # 3. TABY
     counter_tab_title = f"💬 Kontrpropozycje 🔴 ({len(pending_crew)})" if pending_crew else "💬 Kontrpropozycje"
     
-    tab_planning, tab_new_proposal, tab_quotes, tab_counter, tab_accepted = st.tabs([
+    tab_planning, tab_quotes, tab_counter, tab_accepted = st.tabs([
         "📋 Plan Remontu",
-        "➕ Wyślij Nową Wycenę", 
         "📤 Wysłane Propozycje", 
         counter_tab_title, 
         "✅ Moje Umowy"
@@ -90,10 +89,6 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     
     with tab_planning:
         render_crew_planning_module(task_service, ordering_service, selected_project_id, phase_service)
-    
-    with tab_new_proposal:
-        st.subheader("➕ Wyślij Nową Wycenę")
-        render_new_proposal_form(supabase, negotiation_service, phase_service, selected_project_id, task_service)
         
     with tab_quotes:
         st.subheader("📤 Propozycje wysłane do Inwestora")
@@ -124,93 +119,7 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
 # KOMPONENTY
 # =====================================================
 
-def render_new_proposal_form(supabase, negotiation_service, phase_service, project_id, task_service=None):
-    """
-    Formularz do wysłania nowej propozycji ceny - pozwala na tworzenie NOWYCH robót.
-    """
-    st.markdown("### 📝 Dodaj nową robotę i wyceń")
-    st.caption("Tutaj dodajesz nową pozycję do planu remontu i od razu proponujesz za nią cenę.")
-    
-    with st.form("form_create_and_quote_task", clear_on_submit=True):
-        t_name = st.text_input("Nazwa roboty (np. Podwieszany sufit lub Łazienka na gotowo) *")
-        
-        # Pobieranie pomieszczeń i sprawdzanie, czy nie są zablokowane RYCZAŁTEM
-        phases = phase_service.get_phases(project_id)
-        available_rooms = []
-        for p in (phases or []):
-            tasks_in_room = supabase.table("tasks").select("description").eq("phase_id", p['id']).execute().data
-            if not any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in (tasks_in_room or [])):
-                available_rooms.append(p)
-                
-        room_options = {p['phase_name']: p['id'] for p in available_rooms} if available_rooms else {"Brak wolnych pomieszczeń": None}
-        
-        selected_phase_name = st.selectbox("📦 Wybierz pomieszczenie", options=list(room_options.keys()))
-        selected_phase_id = room_options[selected_phase_name]
-        
-        is_lump_sum = st.checkbox("📦 Wyceń całe pomieszczenie (RYCZAŁT ZA CAŁOŚĆ) - zablokuje dodawanie kolejnych zadań w tym pokoju")
-        t_desc = st.text_area("Opis techniczny (opcjonalnie)")
-        
-        col1, col2 = st.columns(2)
-        proposed_price = col1.number_input("💰 Proponowana cena (zł) *", min_value=0.0, step=100.0, value=500.0)
-        proposed_duration = col2.number_input("⏱️ Szacunkowy czas (dni)", min_value=1, step=1, value=1)
-        
-        proposed_notes = st.text_area("📝 Dodatkowe notatki dla Inwestora (opcjonalnie)")
-        
-        if st.form_submit_button("📤 Utwórz i Wyślij Wycenę", use_container_width=True):
-            if not t_name or proposed_price <= 0:
-                st.error("Podaj nazwę roboty i cenę większą niż 0!")
-            else:
-                try:
-                    # Wstrzykujemy ukryty tag, jeśli to ryczałt
-                    final_desc = f"{t_desc}\n[LUMP_SUM_ROOM]" if is_lump_sum else t_desc
-                    
-                    # 1. Tworzymy nowe ZADANIE (Task) korzystając z Serwisu
-                    # Automatycznie dostanie stempel Handshake i statusy
-                    new_task = task_service.create_task(
-                        project_id=project_id,
-                        phase_id=selected_phase_id,
-                        name=t_name,
-                        description=final_desc,
-                        estimated_duration_days=int(proposed_duration)
-                    )
-                    
-                    if new_task:
-                        new_task_id = new_task['id']
-                        
-                        # 2. Odpalamy Handshake 2.0 dla nowego zadania
-                        success, message, neg_id = negotiation_service.propose_price(
-                            task_id=new_task_id,
-                            proposed_by='crew',
-                            price=proposed_price,
-                            duration_days=int(proposed_duration),
-                            notes=proposed_notes
-                        )
-                        
-                        if success:
-                            st.success(f"✅ Dodano robotę i wysłano wycenę!")
-                            # --- SPRAWDŹ CZY NOWE ZADANIE PRZECIĄGA FAZĘ I WYŚLIJ ALERT ---
-                            try:
-                                from services.timeline_service import TimelineService
-                                from components.chat_component import send_system_chat_alert
-                                tl = TimelineService(supabase)
-                                w = tl.get_phase_delay_warning(selected_phase_id)
-                                if w.get("has_warning"):
-                                    alert_msg = (
-                                        f"🚨 ALERT — Pomieszczenie '{selected_phase_name}': "
-                                        f"Szef Ekipy dodał zadanie '{t_name}', które przeciąga "
-                                        f"remont tego pokoju o {w['delay_days']} dni "
-                                        f"(planowany koniec: {w['planned_end']})."
-                                    )
-                                    send_system_chat_alert(supabase, project_id, alert_msg)
-                            except:
-                                pass
-                            st.rerun()
-                        else:
-                            st.error(f"Zadanie utworzone, ale błąd negocjacji: {message}")
-                    else:
-                        st.error("Błąd zapisu do bazy zadań.")
-                except Exception as e:
-                    st.error(f"Wystąpił błąd podczas komunikacji z serwerem: {str(e)}")
+# Metoda render_new_proposal_form została skonsolidowana z tab_planning.
 
 def render_crew_pending_card(neg, negotiation_service):
     task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')
@@ -334,10 +243,19 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
             # Sprawdzamy ryczałt
             is_lump_sum_room = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in ordered_tasks)
             
+            # Oblicz sumę wycenioną dla tego pokoju
+            room_approved_total = sum(float(t.get('final_price') or 0) for t in ordered_tasks if t.get('commercial_status') == 'approved')
+            room_pending_total = sum(float(t.get('final_price') or 0) for t in ordered_tasks if t.get('commercial_status') == 'pending')
+            
             col_room, col_del = st.columns([5, 1])
             with col_room:
                 title_suffix = " 🔒 `RYCZAŁT`" if is_lump_sum_room else ""
                 st.markdown(f"### 📦 {p['phase_name']}{title_suffix}")
+                
+                price_line = f"💰 **Zatwierdzone:** `{room_approved_total:,.0f} zł`"
+                if room_pending_total > 0:
+                    price_line += f" | ⏳ *W negocjacjach:* `{room_pending_total:,.0f} zł`"
+                st.markdown(price_line)
                 
                 # --- OSTRZEŻENIE O PRZECIĄGANIU ---
                 try:
@@ -357,8 +275,49 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                 except Exception as _e:
                     pass
                 
-                if is_lump_sum_room:
-                    st.warning("Pomieszczenie zablokowane dla nowych zadań.")
+                # Jeśli to nie ryczałt, dajemy opcję wyceny ryczałtowej
+                if not is_lump_sum_room:
+                    with st.popover("📦 Wyceń jako Ryczałt za całość"):
+                        st.markdown(f"#### 💰 Propozycja Ryczałtu: **{p['phase_name']}**")
+                        st.caption("Wycena ryczałtowa za całe pomieszczenie. Inne prace w tym pokoju będą mogły mieć cenę 0.00 zł.")
+                        with st.form(key=f"form_lump_sum_{phase_id}", clear_on_submit=True):
+                            lump_price = st.number_input("Cena ryczałtu (zł)", min_value=0.0, step=500.0, value=5000.0)
+                            lump_duration = st.number_input("Czas realizacji (dni)", min_value=1, step=1, value=7)
+                            lump_notes = st.text_area("Notatki dla Inwestora (opcjonalnie)")
+                            
+                            if st.form_submit_button("📤 Wyślij Wycenę Ryczałtową", use_container_width=True):
+                                try:
+                                    lump_task = task_service.create_task(
+                                        project_id=project_id,
+                                        phase_id=phase_id,
+                                        name=f"Ryczałt - {p['phase_name']}",
+                                        description="[LUMP_SUM_ROOM]",
+                                        estimated_duration_days=int(lump_duration)
+                                    )
+                                    if lump_task:
+                                        neg_service = st.session_state.negotiation_service
+                                        success, msg, _ = neg_service.propose_price(
+                                            task_id=lump_task['id'],
+                                            proposed_by='crew',
+                                            price=lump_price,
+                                            duration_days=int(lump_duration),
+                                            notes=lump_notes
+                                        )
+                                        if success:
+                                            st.success("✅ Propozycja ryczałtu wysłana!")
+                                            try:
+                                                from components.chat_component import send_system_chat_alert
+                                                alert_msg = f"🚨 RYCZAŁT — Pomieszczenie '{p['phase_name']}': Szef Ekipy zaproponował ryczałt za całość w wysokości {lump_price:,.0f} zł (szacowany czas: {lump_duration} dni)."
+                                                send_system_chat_alert(supabase, project_id, alert_msg)
+                                            except:
+                                                pass
+                                            st.rerun()
+                                        else:
+                                            st.error(msg)
+                                    else:
+                                        st.error("Nie udało się utworzyć zadania ryczałtowego.")
+                                except Exception as e:
+                                    st.error(f"Błąd: {e}")
             
             with col_del:
                 if not ordered_tasks:
@@ -447,21 +406,21 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
             else:
                 st.caption("Brak zadań. Dodaj pierwsze zadanie w tym pokoju.")
 
-            # Przycisk dodania nowego zadania (tylko jeśli nie ryczałt)
-            if not is_lump_sum_room:
-                st.divider()
-                with st.expander("➕ Dodaj zadanie do tego pokoju"):
-                    with st.form(key=f"fast_add_task_{phase_id}"):
-                        new_t_name = st.text_input("Nazwa zadania")
-                        new_t_dur = st.number_input("Szacowane dni", min_value=1, value=1)
-                        if st.form_submit_button("Dodaj zadanie", use_container_width=True):
-                            if new_t_name:
-                                task_service.create_task(
-                                    project_id=project_id,
-                                    phase_id=phase_id,
-                                    name=new_t_name
-                                )
-                                st.rerun()
+            # Przycisk dodania nowego zadania (zawsze dostępny!)
+            st.divider()
+            with st.expander("➕ Dodaj zadanie do tego pokoju"):
+                with st.form(key=f"fast_add_task_{phase_id}"):
+                    new_t_name = st.text_input("Nazwa zadania")
+                    new_t_dur = st.number_input("Szacowane dni", min_value=1, value=1)
+                    if st.form_submit_button("Dodaj zadanie", use_container_width=True):
+                        if new_t_name:
+                            task_service.create_task(
+                                project_id=project_id,
+                                phase_id=phase_id,
+                                name=new_t_name,
+                                estimated_duration_days=int(new_t_dur)
+                            )
+                            st.rerun()
 
 def render_crew_accepted_card(neg, key_suffix=""):
     task_name = neg.get('tasks', {}).get('name', 'Nieznane zadanie')

@@ -134,10 +134,79 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                 render_change_card(change, change_service)
 
     with tab_budget:
-        st.subheader("📊 Analiza Budżetu")
-        st.write(f"Wydano {spent:,.0f} zł z {total_budget:,.0f} zł")
+        st.subheader("📊 Analiza Budżetu i Kosztów")
+        
+        # 1. Podsumowanie ogólne w ładnych kartach/metrykach
+        c1, c2, c3 = st.columns(3)
+        c1.metric("💰 Budżet Całkowity", f"{total_budget:,.0f} zł")
+        c2.metric("💸 Wydano (Zatwierdzone)", f"{spent:,.0f} zł", delta=f"{spent/total_budget*100:.1f}% budżetu" if total_budget > 0 else None)
+        
+        # Obliczenie sumy wszystkich zatwierdzonych i oczekujących zadań
+        try:
+            all_project_tasks = task_service.get_tasks_by_project(selected_project_id)
+        except:
+            all_project_tasks = []
+            
+        total_approved = sum(float(t.get('final_approved_price') or 0) for t in all_project_tasks if t.get('commercial_status') == 'approved')
+        
+        c3.metric("📊 Pozostało w Budżecie", f"{max(0, total_budget - total_approved):,.0f} zł")
+        
         if total_budget > 0:
-            st.progress(min(spent / total_budget, 1.0))
+            st.progress(min(total_approved / total_budget, 1.0))
+            
+        st.markdown("---")
+        st.markdown("### 🏠 Szczegółowy Kosztorys Pomieszczeń (Rozbicie Prac)")
+        
+        try:
+            phases = phase_service.get_phases(selected_project_id)
+        except:
+            phases = []
+            
+        if not phases:
+            st.info("Brak zdefiniowanych pomieszczeń w projekcie.")
+        else:
+            for p in phases:
+                phase_id = p['id']
+                room_tasks = [t for t in all_project_tasks if t.get('phase_id') == phase_id]
+                
+                # Obliczanie sum dla tego pokoju
+                room_approved = sum(float(t.get('final_approved_price') or 0) for t in room_tasks if t.get('commercial_status') == 'approved')
+                
+                # Nagłówek pomieszczenia w formie karty ze spisem kosztów
+                with st.container(border=True):
+                    # Sprawdzamy czy w tym pomieszczeniu jest ryczałt
+                    has_lump_sum = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in room_tasks)
+                    lump_sum_suffix = " 🔒 `RYCZAŁT`" if has_lump_sum else ""
+                    
+                    st.markdown(f"#### 📦 {p['phase_name']}{lump_sum_suffix}")
+                    st.markdown(f"**Suma zatwierdzonych prac:** `<span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>`", unsafe_allow_html=True)
+                    
+                    if room_tasks:
+                        # Przygotowanie tabeli/listy zadań
+                        task_data = []
+                        for t in room_tasks:
+                            price_val = t.get('final_approved_price')
+                            
+                            # Status handshaku
+                            status_db = t.get('commercial_status') or 'pending'
+                            if status_db == 'approved':
+                                status_desc = "✅ Zaakceptowane"
+                                price_str = f"{price_val:,.0f} zł"
+                            else:
+                                status_desc = "⏳ Wycena/Negocjacje"
+                                price_str = "W ustaleniach"
+                                
+                            task_data.append({
+                                "Zadanie / Robota": t['name'],
+                                "Status Wyceny": status_desc,
+                                "Koszt (PLN)": price_str
+                            })
+                            
+                        # Konwertujemy na DataFrame, aby wyświetlić piękną tabelę
+                        df_tasks = pd.DataFrame(task_data)
+                        st.table(df_tasks)
+                    else:
+                        st.caption("Brak zaplanowanych zadań w tym pomieszczeniu.")
 
     with tab_timeline:
         from components.timeline_widget import render_timeline_widget
