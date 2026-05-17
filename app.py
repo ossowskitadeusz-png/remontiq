@@ -190,8 +190,8 @@ def calculate_quality_score(tasks_accepted: int, total_tasks: int, blockers: int
 # --- STATUSY NEGOCJACYJNE (Handshake Workflow) ---
 TASK_STATUSES = {
     "DRAFT": "📝 Szkic",
-    "TO_BE_VALUED": "❓ Do wyceny (Karol)",
-    "PROPOSED_BY_CREW": "👷 Propozycja Karola",
+    "TO_BE_VALUED": "❓ Do wyceny (Szef Ekipy)",
+    "PROPOSED_BY_CREW": "👷 Propozycja Szefa Ekipy",
     "CHANGES_REQUESTED": "✏️ Korekta Inwestora",
     "ACCEPTED_LOCKED": "🔒 Zaakceptowane",
     "ACTIVE": "🚀 W realizacji",
@@ -390,7 +390,7 @@ def start_task_timer_v2(task_id: str, crew_member_id: str):
             supabase.table("time_tracking").update({"start_time": datetime.now().time().isoformat()}).eq("id", existing.data[0]['id']).execute()
         else:
             supabase.table("time_tracking").insert({"task_id": task_id, "crew_member_id": crew_member_id, "work_date": work_date, "start_time": datetime.now().time().isoformat()}).execute()
-        add_activity_log("Karol", "task_started", task_id, details="▶️ Rozpoczęto pracę")
+        add_activity_log(st.session_state.get("user_name", "Szef Ekipy"), "task_started", task_id, details="▶️ Rozpoczęto pracę")
         return True
     except Exception as e:
         st.error(f"❌ Błąd start: {e}")
@@ -407,7 +407,7 @@ def stop_task_timer_v2(task_id: str, crew_member_id: str):
             if end_dt < start_dt: start_dt -= timedelta(days=1)
             dur = (end_dt - start_dt).total_seconds() / 3600
             supabase.table("time_tracking").update({"end_time": end_dt.time().isoformat(), "duration_hours": round(dur, 2)}).eq("id", t['id']).execute()
-            add_activity_log("Karol", "task_paused", task_id, details=f"⏸️ Pauza ({round(dur, 2)}h)")
+            add_activity_log(st.session_state.get("user_name", "Szef Ekipy"), "task_paused", task_id, details=f"⏸️ Pauza ({round(dur, 2)}h)")
             return {"success": True, "duration_hours": round(dur, 2)}
         return {"success": False}
     except Exception as e:
@@ -418,12 +418,12 @@ def complete_task_v2(task_id: str, crew_member_id: str):
     try:
         stop_task_timer_v2(task_id, crew_member_id)
         supabase.table("tasks").update({"kanban_status": TASK_STATUSES["AWAITING_INSPECTION"]}).eq("id", task_id).execute()
-        add_activity_log("Karol", "task_completed", task_id, details="✅ Gotowe do odbioru")
+        add_activity_log(st.session_state.get("user_name", "Szef Ekipy"), "task_completed", task_id, details="✅ Gotowe do odbioru")
         return True
     except: return False
 
 def calculate_weekly_bonus_v2(project_id: str, crew_member_id: str):
-    """Oblicza aktualną pensję i bonus dla Karola w bieżącym tygodniu."""
+    """Oblicza aktualną pensję i bonus dla Szefa Ekipy w bieżącym tygodniu."""
     try:
         # 1. Pobierz dane z weekly_payroll (jeśli istnieją)
         res = supabase.table("weekly_payroll").select("*").eq("project_id", project_id).eq("crew_member_id", crew_member_id).order("week_start_date", desc=True).limit(1).execute()
@@ -470,7 +470,7 @@ def report_blocker(task_id, description, blocker_type="OTHER"):
         
         blocker_data = {
             "task_id": task_id, "blocker_type": blocker_type, "description": description,
-            "reported_by": "Karol", "reported_at": datetime.now().isoformat(), "is_resolved": False
+            "reported_by": st.session_state.get("user_name", "Szef Ekipy"), "reported_at": datetime.now().isoformat(), "is_resolved": False
         }
         supabase.table("task_blockers").insert(blocker_data).execute()
         
@@ -481,7 +481,7 @@ def report_blocker(task_id, description, blocker_type="OTHER"):
             "status_before_block": old_status
         }).eq("id", task_id).execute()
         
-        log_activity("Karol", "blocker_reported", task_id, f"Blokada: {description}")
+        log_activity(st.session_state.get("user_name", "Szef Ekipy"), "blocker_reported", task_id, f"Blokada: {description}")
         return True
     except Exception: return False
 
@@ -1064,7 +1064,7 @@ def get_filtered_comments(task_name=None, author_role=None, order="newest_first"
 def render_comment_section(task_id, role):
     """Wyświetla czat w stylu WhatsApp."""
     comments = get_comments(task_id)
-    user_name = "Karol" if role == "crew" else "Inwestor"
+    user_name = st.session_state.get("user_name") or ("Szef Ekipy" if role == "crew" else "Inwestor")
     
     with st.expander(f"💬 Chat ({len(comments)})"):
         render_whatsapp_chat(comments, user_name, task_id, context="kanban")
@@ -1380,7 +1380,7 @@ def render_chat_input(task_id, current_user, context="input"):
                 if up:
                     res = upload_task_photo(task_id, up)
                     if res['success']: url = res['url']
-                role = "investor" if current_user != "Karol" else "crew"
+                role = st.session_state.get("role", "crew")
                 add_comment_with_photo(task_id, current_user, role, msg, url)
                 st.rerun()
 
@@ -1545,6 +1545,163 @@ PAYMENT_LOG_TYPE = "DECISION"
 def is_payment_request_log(log):
     data = parse_project_log_data(log.get("data"))
     return bool(data.get("payment_type"))
+
+# --- PIĄTKOWA ZALICZKA TYGODNIOWA HELPERY (SPRINT 27) ---
+def get_secret_float(name, default=1000.0):
+    try:
+        return float(st.secrets.get(name, default))
+    except Exception:
+        return default
+
+WEEKLY_CREW_ADVANCE_AMOUNT = get_secret_float("WEEKLY_CREW_ADVANCE_AMOUNT", 1000.0)
+
+def get_current_week_key(today=None):
+    from datetime import date, datetime
+    if today is None:
+        today = date.today()
+    elif isinstance(today, datetime):
+        today = today.date()
+    year, week, weekday = today.isocalendar()
+    return f"{year}-W{week:02d}"
+
+def get_week_friday_date(today=None):
+    from datetime import date, datetime, timedelta
+    if today is None:
+        today = date.today()
+    elif isinstance(today, datetime):
+        today = today.date()
+    weekday = today.isocalendar()[2]
+    friday = today + timedelta(days=(5 - weekday))
+    return friday.strftime("%Y-%m-%d")
+
+def is_weekly_advance_request(log):
+    if not is_payment_request_log(log):
+        return False
+    data = parse_project_log_data(log.get("data"))
+    return bool(data.get("weekly_advance")) or data.get("payment_subtype") == "WEEKLY_FRIDAY_ADVANCE"
+
+def find_existing_weekly_advance(project_id, week_key):
+    try:
+        res = supabase.table("project_logs").select("*").eq("project_id", project_id).eq("type", PAYMENT_LOG_TYPE).execute()
+        logs = res.data or []
+        for log in logs:
+            if not is_weekly_advance_request(log):
+                continue
+            data = parse_project_log_data(log.get("data"))
+            if data.get("week_key") == week_key:
+                if log.get("status") not in ["REJECTED", "CANCELLED"]:
+                    return log
+        return None
+    except Exception:
+        return None
+
+def is_weekly_advance_agreement_log(log):
+    if is_payment_request_log(log):
+        return False
+    data = parse_project_log_data(log.get("data"))
+    return bool(data.get("weekly_advance_agreement")) or data.get("config_type") == "WEEKLY_ADVANCE_AGREEMENT"
+
+def get_weekly_advance_agreement(project_id):
+    try:
+        res = supabase.table("project_logs")\
+            .select("*")\
+            .eq("project_id", project_id)\
+            .eq("type", PAYMENT_LOG_TYPE)\
+            .execute()
+        logs = res.data or []
+        agreements = []
+        for log in logs:
+            if not is_weekly_advance_agreement_log(log):
+                continue
+            if log.get("status") in ["CANCELLED", "SUPERSEDED", "REJECTED"]:
+                continue
+            agreements.append(log)
+        
+        if not agreements:
+            return None
+            
+        def get_sort_key(log):
+            data = parse_project_log_data(log.get("data"))
+            return data.get("effective_from") or log.get("created_at") or ""
+            
+        agreements.sort(key=get_sort_key, reverse=True)
+        latest = agreements[0]
+        data = parse_project_log_data(latest.get("data"))
+        
+        return {
+            "log_id": latest.get("id"),
+            "agreed_weekly_amount": safe_float(data.get("agreed_weekly_amount")),
+            "currency": data.get("currency") or "PLN",
+            "effective_from": data.get("effective_from") or latest.get("created_at", "")[:10],
+            "note": latest.get("description") or data.get("note") or "",
+            "source": "PROJECT_AGREEMENT"
+        }
+    except Exception:
+        return None
+
+def get_weekly_advance_amount_for_project(project_id):
+    agreement = get_weekly_advance_agreement(project_id)
+    if agreement is not None:
+        return {
+            "amount": agreement["agreed_weekly_amount"],
+            "source": "PROJECT_AGREEMENT",
+            "agreement_log_id": agreement["log_id"],
+            "currency": agreement["currency"],
+            "effective_from": agreement["effective_from"],
+            "note": agreement["note"]
+        }
+    return {
+        "amount": WEEKLY_CREW_ADVANCE_AMOUNT,
+        "source": "GLOBAL_FALLBACK",
+        "agreement_log_id": None,
+        "currency": "PLN",
+        "effective_from": None,
+        "note": "Domyślna kwota systemowa"
+    }
+
+def create_or_update_weekly_advance_agreement(project_id, amount, note=None, created_by_role="INVESTOR"):
+    from datetime import date
+    if amount <= 0:
+        raise ValueError("Amount must be greater than zero")
+        
+    try:
+        res = supabase.table("project_logs")\
+            .select("*")\
+            .eq("project_id", project_id)\
+            .eq("type", PAYMENT_LOG_TYPE)\
+            .execute()
+        logs = res.data or []
+        for log in logs:
+            if is_weekly_advance_agreement_log(log):
+                if log.get("status") not in ["CANCELLED", "SUPERSEDED", "REJECTED"]:
+                    supabase.table("project_logs")\
+                        .update({"status": "SUPERSEDED"})\
+                        .eq("id", log["id"])\
+                        .execute()
+    except Exception as e:
+        pass
+        
+    import json
+    log_data = {
+        "config_type": "WEEKLY_ADVANCE_AGREEMENT",
+        "weekly_advance_agreement": True,
+        "agreed_weekly_amount": float(amount),
+        "currency": "PLN",
+        "effective_from": date.today().strftime("%Y-%m-%d"),
+        "created_by_role": created_by_role,
+        "note": note or "Uzgodniona piątkowa zaliczka z szefem ekipy"
+    }
+    
+    res_insert = supabase.table("project_logs").insert({
+        "project_id": project_id,
+        "type": PAYMENT_LOG_TYPE,
+        "status": "ACTIVE",
+        "title": f"Uzgodniona piątkowa zaliczka: {money(amount)}",
+        "description": note or "Uzgodniona piątkowa zaliczka z szefem ekipy",
+        "data": json.dumps(log_data)
+    }).execute()
+    
+    return res_insert.data[0] if res_insert.data else None
 
 def build_payment_expense_description(log_id, payment_type, note):
     marker = f"[payment_request:{log_id}]"
@@ -2028,7 +2185,7 @@ def render_activity_banner(role):
 # 1. Pobranie metadanych projektu (Wspólne)
 project_meta = get_project_metadata()
 proj_name = project_meta['project_name'] if project_meta else "Brak projektu"
-role_name = "Inwestor" if st.session_state['role'] == "investor" else "Ekipa (Karol)"
+role_name = "Inwestor" if st.session_state['role'] == "investor" else f"Ekipa ({st.session_state.get('user_name', 'Szef Ekipy')})"
 
 # 2. Renderowanie Górnego Bara (Wspólne)
 render_top_bar(proj_name, role_name, st.session_state.get('user_name', 'Użytkownik'))
@@ -2143,7 +2300,7 @@ if st.session_state['role'] == "crew":
         st.markdown(f"""
         <div style="height: 70vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 30px; color: white; text-align: center; padding: 40px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);">
             <div style="font-size: 100px; margin-bottom: 20px;">🏗️</div>
-            <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY KAROL!</h1>
+            <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY {str(st.session_state.get("user_name", "EKIPA")).upper()}!</h1>
             <p style="font-size: 24px; opacity: 0.8; margin-top: 10px;">Dziś jest {datetime.now().strftime('%A, %d.%m.%Y')}</p>
             <p style="font-size: 18px; margin-top: 30px; font-style: italic;">"Dobry plan to połowa sukcesu."</p>
         </div>
@@ -2166,8 +2323,9 @@ if st.session_state['role'] == "crew":
         </div>
         """, unsafe_allow_html=True)
         
-        tab_settlement, tab_history = st.tabs([
+        tab_settlement, tab_weekly, tab_history = st.tabs([
             "💸 ROZLICZENIE OKRESOWE (MODEL 50/100)",
+            "🗓️ UMÓWIONA PIĄTKOWA ZALICZKA",
             "📜 STATUS I HISTORIA WNIOSKÓW"
         ])
         
@@ -2296,6 +2454,239 @@ if st.session_state['role'] == "crew":
                             st.rerun()
 
             st.caption("ℹ️ Model Hybrydowy 50/100: 100% DONE | 50% TODO/IN_PROGRESS | 0% BLOCKED | Global Cap 30%.")
+
+        with tab_weekly:
+            # --- PIĄTKOWA ZALICZKA TYGODNIOWA ---
+            st.write("### 🗓️ Umówiona piątkowa zaliczka")
+            
+            agreement_info = get_weekly_advance_amount_for_project(p_id)
+            configured_weekly_amount = agreement_info["amount"]
+            agreement_source = agreement_info["source"]
+            agreement_log_id = agreement_info["agreement_log_id"]
+            
+            if agreement_source == "GLOBAL_FALLBACK":
+                st.info("💡 Dla tego remontu nie ustawiono jeszcze indywidualnej umowy. Używana jest domyślna kwota systemowa.")
+            else:
+                st.success(f"🤝 Ustalona indywidualnie kwota dla tego remontu: **{money(configured_weekly_amount)}** (Zapisana przez Inwestora)")
+            
+            current_week = get_current_week_key()
+            friday_date = get_week_friday_date()
+            existing_adv = find_existing_weekly_advance(p_id, current_week)
+            
+            available = fin.get("available", 0.0)
+            min_amount = PAYMENT_RULES["min_payment_request_amount"]
+            
+            # Oblicz suggested amount
+            if available >= configured_weekly_amount:
+                suggested_amount = configured_weekly_amount
+                limit_warning = None
+            else:
+                suggested_amount = available
+                limit_warning = "Obecny limit 50/100 jest niższy niż umówiona zaliczka. Możesz złożyć wniosek tylko do wysokości dostępnego limitu."
+            
+            # Pokaż status kartę
+            with st.container(border=True):
+                # Pokaż metryki
+                st.write("**Bieżący Tydzień:** Rozliczenie piątkowe")
+                col_met1, col_met2, col_met3 = st.columns(3)
+                col_met1.write(f"💵 **Umówiona kwota:** {money(configured_weekly_amount)}")
+                if agreement_source == "PROJECT_AGREEMENT":
+                    col_met1.caption("🤝 Ustalona indywidualnie")
+                else:
+                    col_met1.caption("💡 Domyślna kwota systemowa")
+                col_met2.write(f"📊 **Dostępny limit 50/100:** {money(available)}")
+                col_met3.write(f"📅 **Planowany przelew:** {friday_date}")
+                
+                # Ustalenie statusu i renderowanie przycisków
+                if not existing_adv:
+                    # Status A: Nie złożono jeszcze wniosku
+                    st.warning("⚠️ **Status zaliczki w tym tygodniu:** Nie złożono jeszcze wniosku")
+                    
+                    if limit_warning:
+                        st.warning(limit_warning)
+                        
+                    if suggested_amount < min_amount:
+                        st.error("❌ Obecny limit 50/100 jest niższy niż minimalna kwota wniosku. Poczekaj na postęp prac lub rozliczenie zadań.")
+                        st.button("🗓️ Potwierdzam i składam wniosek o piątkową zaliczkę", disabled=True, use_container_width=True)
+                    else:
+                        with st.form("weekly_advance_form_new", clear_on_submit=True):
+                            st.write(f"Kwota sugerowana: **{money(suggested_amount)}** (kliknij poniżej, aby zatwierdzić)")
+                            amount_val = st.number_input("Zgłaszana kwota zaliczki (PLN)", value=float(suggested_amount), min_value=float(min_amount), max_value=float(suggested_amount), step=100.0)
+                            if st.form_submit_button("🗓️ Potwierdzam i składam wniosek o piątkową zaliczkę", type="primary", use_container_width=True):
+                                fresh_fin = calculate_hybrid_payment_limit(p_id)
+                                fresh_available = fresh_fin.get("available", 0.0)
+                                if amount_val > fresh_available:
+                                    st.error(f"❌ Kwota przekracza aktualny dostępny limit ({money(fresh_available)}).")
+                                elif amount_val < min_amount:
+                                    st.error(f"❌ Kwota jest niższa niż minimalna ({money(min_amount)}).")
+                                else:
+                                    import json
+                                    u_id = st.session_state.get('user_id')
+                                    fresh_snapshot = build_payment_limit_snapshot(fresh_fin)
+                                    
+                                    log_data = {
+                                        "amount": amount_val,
+                                        "note": "Piątkowa zaliczka tygodniowa",
+                                        "payment_type": "ADVANCE",
+                                        "payment_subtype": "WEEKLY_FRIDAY_ADVANCE",
+                                        "weekly_advance": True,
+                                        "week_key": current_week,
+                                        "scheduled_payment_date": friday_date,
+                                        "limit_snapshot": fresh_snapshot,
+                                        "timestamp": datetime.now().isoformat(),
+                                        "created_by_id": u_id,
+                                        "reported_by": st.session_state.get("user_name", "Ekipa"),
+                                        "agreed_weekly_amount": configured_weekly_amount,
+                                        "agreement_log_id": agreement_log_id,
+                                        "agreement_source": agreement_source,
+                                        "confirmed_by_crew": True,
+                                        "confirmed_by_crew_at": datetime.now().isoformat()
+                                    }
+                                    
+                                    supabase.table("project_logs").insert({
+                                        "project_id": p_id,
+                                        "type": PAYMENT_LOG_TYPE,
+                                        "title": f"Piątkowa zaliczka: {money(amount_val)}",
+                                        "description": "Piątkowa zaliczka tygodniowa",
+                                        "data": json.dumps(log_data),
+                                        "status": PAYMENT_STATUS_SUBMITTED
+                                    }).execute()
+                                    
+                                    add_activity_log(
+                                        st.session_state.get("user_name", "Ekipa"),
+                                        "FINANCIAL",
+                                        p_id,
+                                        f"Złożono wniosek o piątkową zaliczkę za tydzień {current_week} na kwotę {money(amount_val)}"
+                                    )
+                                    
+                                    st.success("✅ Wniosek o piątkową zaliczkę wysłany do Inwestora!")
+                                    time.sleep(1.5)
+                                    st.rerun()
+                else:
+                    existing_data = parse_project_log_data(existing_adv.get("data"))
+                    existing_amount = safe_float(existing_data.get("amount"))
+                    existing_status = existing_adv.get("status")
+                    
+                    st.write(f"📋 **Szczegóły wniosku w tym tygodniu:**")
+                    st.write(f"- **Kwota wnioskowana:** {money(existing_amount)}")
+                    
+                    if existing_status == PAYMENT_STATUS_SUBMITTED:
+                        # Status B: Wniosek wysłany do Inwestora
+                        st.info("⏳ **Status zaliczki w tym tygodniu:** Wniosek wysłany do Inwestora")
+                        st.info("Wniosek o piątkową zaliczkę został wysłany do Inwestora i oczekuje na zatwierdzenie.")
+                    
+                    elif existing_status == PAYMENT_STATUS_APPROVED_BY_INVESTOR:
+                        # Status C: Inwestor zadeklarował przelew
+                        st.success("🟢 **Status zaliczki w tym tygodniu:** Inwestor zadeklarował przelew")
+                        st.markdown("**Inwestor zadeklarował przelew.**")
+                        if st.button("📥 Potwierdzam odbiór piątkowej zaliczki", key=f"confirm_weekly_rec_{existing_adv['id']}", type="primary", use_container_width=True):
+                            res = confirm_payment_received_by_crew(existing_adv['id'])
+                            if res['status'] == 'ok':
+                                add_activity_log(st.session_state.get("user_name", "Ekipa"), "FINANCIAL", p_id, f"Potwierdzono odbiór piątkowej zaliczki: {money(existing_amount)}")
+                                st.success("✅ Zaliczka rozliczona poprawnie!")
+                                time.sleep(1.5)
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {res['message']}")
+                                
+                    elif existing_status == PAYMENT_STATUS_PAID:
+                        # Status D: Zaliczka rozliczona
+                        st.success("✅ **Status zaliczki w tym tygodniu:** Zaliczka rozliczona")
+                        paid_at_str = existing_data.get("paid_at", existing_adv.get("created_at", ""))[:10]
+                        st.write(f"Zaliczka za ten tydzień została rozliczona (Data: **{paid_at_str}**).")
+                        
+                    elif existing_status == PAYMENT_STATUS_REJECTED:
+                        # Status E: Wniosek odrzucony
+                        st.error("❌ **Status zaliczki w tym tygodniu:** Wniosek odrzucony")
+                        rej_reason = existing_data.get("rejection_reason") or existing_adv.get("description") or "Brak podanego powodu"
+                        st.caption(f"**Powód odrzucenia:** {rej_reason}")
+                        
+                        # Można złożyć nowy wniosek, bo odrzucony nie blokuje!
+                        st.divider()
+                        st.write("Możesz złożyć nowy wniosek dla tego tygodnia:")
+                        if limit_warning:
+                            st.warning(limit_warning)
+                        if suggested_amount < min_amount:
+                            st.error("❌ Obecny limit 50/100 jest niższy niż minimalna kwota wniosku. Poczekaj na postęp prac.")
+                        else:
+                            with st.form("weekly_advance_form_retry", clear_on_submit=True):
+                                amount_val = st.number_input("Zgłaszana kwota zaliczki (PLN)", value=float(suggested_amount), min_value=float(min_amount), max_value=float(suggested_amount), step=100.0)
+                                if st.form_submit_button("🗓️ Potwierdzam i składam wniosek o piątkową zaliczkę", type="primary", use_container_width=True):
+                                    fresh_fin = calculate_hybrid_payment_limit(p_id)
+                                    fresh_available = fresh_fin.get("available", 0.0)
+                                    if amount_val > fresh_available:
+                                        st.error(f"❌ Kwota przekracza limit ({money(fresh_available)}).")
+                                    elif amount_val < min_amount:
+                                        st.error(f"❌ Kwota jest niższa niż minimalna ({money(min_amount)}).")
+                                    else:
+                                        import json
+                                        u_id = st.session_state.get('user_id')
+                                        fresh_snapshot = build_payment_limit_snapshot(fresh_fin)
+                                        
+                                        log_data = {
+                                            "amount": amount_val,
+                                            "note": "Piątkowa zaliczka tygodniowa (Ponowne zgłoszenie)",
+                                            "payment_type": "ADVANCE",
+                                            "payment_subtype": "WEEKLY_FRIDAY_ADVANCE",
+                                            "weekly_advance": True,
+                                            "week_key": current_week,
+                                            "scheduled_payment_date": friday_date,
+                                            "limit_snapshot": fresh_snapshot,
+                                            "timestamp": datetime.now().isoformat(),
+                                            "created_by_id": u_id,
+                                            "reported_by": st.session_state.get("user_name", "Ekipa"),
+                                            "agreed_weekly_amount": configured_weekly_amount,
+                                            "agreement_log_id": agreement_log_id,
+                                            "agreement_source": agreement_source,
+                                            "confirmed_by_crew": True,
+                                            "confirmed_by_crew_at": datetime.now().isoformat()
+                                        }
+                                        
+                                        supabase.table("project_logs").insert({
+                                            "project_id": p_id,
+                                            "type": PAYMENT_LOG_TYPE,
+                                            "title": f"Piątkowa zaliczka: {money(amount_val)}",
+                                            "description": "Piątkowa zaliczka tygodniowa",
+                                            "data": json.dumps(log_data),
+                                            "status": PAYMENT_STATUS_SUBMITTED
+                                        }).execute()
+                                        
+                                        st.success("✅ Wysłano nową zaliczkę!")
+                                        time.sleep(1.5)
+                                        st.rerun()
+
+            # --- HISTORIA PIĄTKOWYCH ZALICZEK ---
+            st.divider()
+            st.write("#### 📜 Historia piątkowych zaliczek")
+            try:
+                hist_resp = supabase.table("project_logs").select("*").eq("project_id", p_id).eq("type", PAYMENT_LOG_TYPE).execute()
+                hist_logs = hist_resp.data or []
+                weekly_logs = [log for log in hist_logs if is_weekly_advance_request(log)]
+                # Sort by created_at desc
+                weekly_logs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+                
+                if not weekly_logs:
+                    st.caption("Brak wcześniejszych rozliczeń tygodniowych.")
+                else:
+                    for wl in weekly_logs[:8]:
+                        wl_data = parse_project_log_data(wl.get("data"))
+                        wl_amount = safe_float(wl_data.get("amount"))
+                        wl_status = wl.get("status")
+                        wl_friday = wl_data.get("scheduled_payment_date") or wl.get("created_at", "")[:10]
+                        wl_week = wl_data.get("week_key") or "—"
+                        
+                        status_style = "✅ Rozliczona" if wl_status == PAYMENT_STATUS_PAID else get_payment_status_label(wl_status)
+                        
+                        agreed_amount = wl_data.get("agreed_weekly_amount")
+                        source_str = ""
+                        if agreed_amount:
+                            src = wl_data.get("agreement_source") or "GLOBAL_FALLBACK"
+                            src_label = "Indywidualna" if src == "PROJECT_AGREEMENT" else "Domyślna"
+                            source_str = f" (Umowa: {money(agreed_amount)} [{src_label}])"
+                        
+                        st.markdown(f"- **Tydzień {wl_week}** (Przelew: `{wl_friday}`): **{money(wl_amount)}**{source_str} | Status: *{status_style}*")
+            except Exception as e:
+                st.caption(f"Nie udało się załadować historii: {e}")
 
         with tab_history:
             st.markdown("## 📜 Status i historia wniosków")
@@ -2442,7 +2833,7 @@ if st.session_state['role'] == "crew":
                 elif st.session_state["role"] == "crew":
                     st.session_state["user_role"] = "CREW_LEAD"
                     st.session_state["user_id"] = "00000000-0000-0000-0000-000000000002"
-                    st.session_state["user_name"] = "Karol (PIN)"
+                    st.session_state["user_name"] = "Szef Ekipy (PIN)"
 
             render_chat_component(
                 supabase=supabase,
@@ -2494,7 +2885,7 @@ if menu == "home" or menu == "investor_2_0":
                 w_investor_name = st.text_input("Imię Inwestora", placeholder="np. Michał", label_visibility="collapsed")
             with col_names2:
                 st.markdown("### 👷 Jak ma na imię Szef Ekipy?")
-                w_crew_name = st.text_input("Szef Ekipy", placeholder="np. Karol (lub nazwa firmy)", label_visibility="collapsed")
+                w_crew_name = st.text_input("Szef Ekipy", placeholder="np. Szef Ekipy (lub nazwa firmy)", label_visibility="collapsed")
 
             col_bud, col_date = st.columns(2)
             with col_bud:
@@ -2617,14 +3008,14 @@ elif menu == "chat":
 
 elif menu == "plan":
     st.title("📋 Plan Remontu")
-    st.caption("Poniżej znajduje się struktura prac ułożona przez Karola, z podziałem na pokoje.")
+    st.caption("Poniżej znajduje się struktura prac ułożona przez Szefa Ekipy, z podziałem na pokoje.")
     p_id = project_meta.get('id') if project_meta else None
     if not p_id:
         st.warning("Najpierw skonfiguruj projekt.")
         st.stop()
     phases = phase_service.get_phases(p_id)
     if not phases:
-        st.info("📭 Karol nie dodał jeszcze żadnych pomieszczeń do swojego planu.")
+        st.info("📭 Szef Ekipy nie dodał jeszcze żadnych pomieszczeń do swojego planu.")
     else:
         phase_ids = [p.get("id") for p in phases if p.get("id")]
         all_tasks = []
@@ -2777,12 +3168,12 @@ elif menu == "dashboard_view":
                 h1.caption(f"Zgłoszono: {str(insp.get('submitted_at',''))[:10]} | Zespół: {task_info.get('assigned_to','—')}")
                 h2.warning("⏳ Czeka")
                 if insp.get("submission_notes"):
-                    st.info(f"📝 Karol: {insp['submission_notes']}")
+                    st.info(f"📝 Szef Ekipy: {insp['submission_notes']}")
                 render_comment_section(insp['task_id'], "investor")
                 ba, bb = st.columns(2)
                 if ba.button("✅ ZATWIERDŹ", key=f"cc_appr_{insp['id']}", width="stretch", type="primary"):
                     approve_inspection(insp["id"])
-                    st.success("✅ Zatwierdzone! Karol widzi to na tablicy.")
+                    st.success("✅ Zatwierdzone! Szef Ekipy widzi to na tablicy.")
                     st.rerun()
                 if bb.button("❌ WYMAGA POPRAWEK", key=f"cc_rwrk_{insp['id']}", width="stretch"):
                     st.session_state[f"rework_{insp['id']}"] = True
@@ -2855,9 +3246,9 @@ elif menu == "dashboard_view":
         st.divider()
 
     # ==============================
-    # SEKCJA 6: PLAN KAROLA (mini)
+    # SEKCJA 6: BIEŻĄCY PLAN EKIPY (mini)
     # ==============================
-    st.markdown("## 📅 PLAN KAROLA — TOP 5 ZADAŃ")
+    st.markdown("## 📅 PLAN PRAC EKIPY — TOP 5 ZADAŃ")
     top_tasks = supabase.table("tasks").select("name,kanban_status,planned_start_date,planned_end_date,is_blocked").order("planned_start_date").limit(5).execute().data or []
     if top_tasks:
         STATUS_EMOJI = {"BACKLOG": "⬜", "READY": "🟦", "IN_PROGRESS": "🟧", "AWAITING_INSPECTION": "🔔", "COMPLETED": "🟩"}
@@ -2867,7 +3258,7 @@ elif menu == "dashboard_view":
             st.write(f"{em} **{t['name']}**{blk}")
             st.caption(f"   {t.get('planned_start_date','?')} → {t.get('planned_end_date','?')}")
     else:
-        st.info("Karol jeszcze nie zaplanował zadań.")
+        st.info("Szef Ekipy jeszcze nie zaplanował zadań.")
 
 
 
@@ -2960,16 +3351,16 @@ elif menu == "budget":
 
 elif menu == "tasks":
     st.title("📋 PLAN REMONTU — Twój Harmonogram")
-    st.caption("Poniżej znajduje się struktura prac ułożona przez Karola, z podziałem na pokoje.")
+    st.caption("Poniżej znajduje się struktura prac ułożona przez Szefa Ekipy, z podziałem na pokoje.")
     
     p_id = project_meta.get('id') if project_meta else None
     if not p_id:
-        st.warning("Najpierw utwórz Charter Projektu, aby Karol miał gdzie pracować.")
+        st.warning("Najpierw utwórz Charter Projektu, aby Szef Ekipy miał gdzie pracować.")
         st.stop()
         
     phases = phase_service.get_phases(p_id)
     if not phases:
-        st.info("📭 Karol nie dodał jeszcze żadnych pomieszczeń do swojego planu. Upewnij się, że ma je do wyboru w Twoim słowniku.")
+        st.info("📭 Szef Ekipy nie dodał jeszcze żadnych pomieszczeń do swojego planu. Upewnij się, że ma je do wyboru w Twoim słowniku.")
     else:
         # POBIERANIE WSZYSTKICH ZADAŃ RAZ (Rozwiązanie N+1)
         phase_ids = [p.get("id") for p in phases if p.get("id")]
@@ -3002,7 +3393,7 @@ elif menu == "tasks":
                     st.markdown(f"### 🚪 Pokój: {p['phase_name']}")
                     
                 if not room_tasks:
-                    st.caption("Karol nie przypisał tu jeszcze żadnej wyceny ani zadania.")
+                    st.caption("Szef Ekipy nie przypisał tu jeszcze żadnej wyceny ani zadania.")
                 else:
                     for t in room_tasks:
                         desc = t.get('description') or ''
@@ -3033,7 +3424,7 @@ elif menu == "tasks":
 
 elif menu == "inspections":
     st.title("🔔 ODBIÓR PRAC")
-    st.caption("Karol zgłosił zakończenie zadań. Sprawdzi je, dodaj komentarz i zatwierdź lub zażąda poprawek.")
+    st.caption("Szef Ekipy zgłosił zakończenie zadań. Sprawdzi je, dodaj komentarz i zatwierdź lub zażąda poprawek.")
 
     pending = get_pending_inspections()
 
@@ -3060,7 +3451,7 @@ elif menu == "inspections":
                 if task.get('description'):
                     st.write(f"**Zakres prac:** {task['description']}")
                 if inspection.get('submission_notes'):
-                    st.info(f"📝 **Uwagi Karola:** {inspection['submission_notes']}")
+                    st.info(f"📝 **Uwagi Szefa Ekipy:** {inspection['submission_notes']}")
 
                 st.divider()
                 st.write("**Twoja decyzja:**")
@@ -3071,7 +3462,7 @@ elif menu == "inspections":
                     if st.button("✅ ZATWIERDŹ PRACE", key=f"approve_{inspection['id']}", width="stretch", type="primary"):
                         result = approve_inspection(inspection['id'], approve_note)
                         if result['status'] == 'ok':
-                            st.success(f"✅ Zadanie \"{task.get('name')}\" zatwierdzone! Karol zobaczy to na swojej tablicy.")
+                            st.success(f"✅ Zadanie \"{task.get('name')}\" zatwierdzone! Szef Ekipy zobaczy to na swojej tablicy.")
                             st.rerun()
 
                 with col_rework:
@@ -3082,7 +3473,7 @@ elif menu == "inspections":
                         else:
                             result = request_rework(inspection['id'], rework_desc)
                             if result['status'] == 'ok':
-                                st.warning(f"❌ Zadanie \"{task.get('name')}\" wróciło do Karola z opisem poprawek.")
+                                st.warning(f"❌ Zadanie \"{task.get('name')}\" wróciło do Szefa Ekipy z opisem poprawek.")
                                 st.rerun()
 
     st.divider()
@@ -3257,6 +3648,78 @@ elif menu == "settlements":
         c2.metric("💳 Wypłacone / Oczekujące", money(limit_res.get("already_paid", 0.0)))
         c3.metric("🏠 Budżet projektu", money(limit_res.get("budget", 0.0)))
         
+    # --- INDYWIDUALNA UMOWA PIĄTKOWEJ ZALICZKI ---
+    with st.container(border=True):
+        st.write("### 🗓️ Umówiona piątkowa zaliczka Ekipy")
+        st.caption("Ustal stałą stawkę tygodniowych zaliczek dla szefa ekipy na ten remont. Zmiana umowy zastąpi poprzednią stawkę.")
+        
+        agreement_info = get_weekly_advance_amount_for_project(project_meta['id'])
+        current_amount = agreement_info["amount"]
+        agreement_source = agreement_info["source"]
+        agreement_effective = agreement_info["effective_from"]
+        agreement_note = agreement_info["note"]
+        
+        col_ag1, col_ag2 = st.columns(2)
+        with col_ag1:
+            st.markdown(f"**Aktualna stawka:** {money(current_amount)}")
+            if agreement_source == "PROJECT_AGREEMENT":
+                st.success("🤝 Ustalona indywidualnie dla tego remontu")
+                if agreement_effective:
+                    st.caption(f"📅 Obowiązuje od: **{agreement_effective}**")
+            else:
+                st.info("💡 Domyślna kwota systemowa (brak indywidualnej umowy)")
+                
+        with col_ag2:
+            if agreement_note:
+                st.markdown(f"**Ustalenia / Notatka:**\n*{agreement_note}*")
+            else:
+                st.markdown("**Notatka:** Brak notatki")
+                
+        st.markdown("#### ⚙️ Zmień warunki umowy")
+        with st.form("update_weekly_agreement_form", clear_on_submit=True):
+            col_in1, col_in2 = st.columns(2)
+            new_amount = col_in1.number_input("Nowa kwota zaliczki tygodniowej (PLN)", value=float(current_amount), min_value=100.0, step=100.0)
+            new_note = col_in2.text_input("Uzasadnienie / Notatka ustaleń", value=agreement_note or "")
+            if st.form_submit_button("💾 Zapisz umówioną zaliczkę dla tego remontu", type="primary", use_container_width=True):
+                if new_amount <= 0:
+                    st.error("Kwota zaliczki musi być większa od zera.")
+                else:
+                    create_or_update_weekly_advance_agreement(project_meta['id'], new_amount, new_note, created_by_role="INVESTOR")
+                    add_activity_log(
+                        st.session_state.get("user_name", "Inwestor"),
+                        "FINANCIAL",
+                        project_meta['id'],
+                        f"Zmieniono umowę o piątkową zaliczkę na kwotę {money(new_amount)}"
+                    )
+                    st.success("✅ Nowa umowa została pomyślnie zapisana!")
+                    time.sleep(1.5)
+                    st.rerun()
+                    
+        # Opcjonalna historia zmian umowy
+        try:
+            res_all = supabase.table("project_logs")\
+                .select("*")\
+                .eq("project_id", project_meta['id'])\
+                .eq("type", PAYMENT_LOG_TYPE)\
+                .execute()
+            all_logs = res_all.data or []
+            ag_logs = [log for log in all_logs if is_weekly_advance_agreement_log(log)]
+            ag_logs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            
+            if ag_logs:
+                st.markdown("#### 📜 Historia zmian umowy zaliczkowej")
+                for al in ag_logs[:5]:
+                    al_data = parse_project_log_data(al.get("data"))
+                    al_amount = safe_float(al_data.get("agreed_weekly_amount"))
+                    al_status = al.get("status")
+                    al_date = al_data.get("effective_from") or al.get("created_at", "")[:10]
+                    al_note = al.get("description") or al_data.get("note") or ""
+                    
+                    status_badge = "✅ AKTYWNA" if al_status == "ACTIVE" else "⏳ ZASTĄPIONA"
+                    st.markdown(f"- **{money(al_amount)}** ({status_badge}) | Od: `{al_date}` | *{al_note}*")
+        except Exception:
+            pass
+
     # --- DEBUG PANEL (Zasada 1 - Tylko jeśli włączony w Secrets) ---
     show_finance_debug = False
     try:
@@ -3301,7 +3764,9 @@ elif menu == "settlements":
                 with col1:
                     st.subheader(f"Wniosek: {money(req_amount)}")
                     st.markdown(f"**Typ:** {get_payment_type_label(req_type)}")
-                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]} | Autor: **Karol**")
+                    if d.get("weekly_advance") or d.get("payment_subtype") == "WEEKLY_FRIDAY_ADVANCE":
+                        st.info(f"🗓️ **Piątkowa zaliczka** | Tydzień: `{d.get('week_key', '—')}` | Planowany przelew: `{d.get('scheduled_payment_date', '—')}`")
+                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]} | Autor: **Szef Ekipy**")
                     if req_note: st.info(f"📝 Uzasadnienie: {req_note}")
                     
                     st.markdown(f"**Status:** {get_payment_status_label(req.get('status'))}")
@@ -3369,7 +3834,9 @@ elif menu == "settlements":
                 with col1:
                     st.subheader(f"Wniosek: {money(req_amount)}")
                     st.markdown(f"**Typ:** {get_payment_type_label(req_type)}")
-                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]} | Autor: **Karol**")
+                    if d.get("weekly_advance") or d.get("payment_subtype") == "WEEKLY_FRIDAY_ADVANCE":
+                        st.info(f"🗓️ **Piątkowa zaliczka** | Tydzień: `{d.get('week_key', '—')}` | Planowany przelew: `{d.get('scheduled_payment_date', '—')}`")
+                    st.write(f"📅 Data zgłoszenia: {req['created_at'][:10]} | Autor: **Szef Ekipy**")
                     if req_note: st.info(f"📝 Uzasadnienie Ekipy: {req_note}")
                     if inv_note: st.success(f"💬 Twoja notatka: {inv_note}")
                     if trans_date: st.write(f"📅 Zadeklarowana data przelewu: **{trans_date}**")
@@ -3407,6 +3874,8 @@ elif menu == "settlements":
                     with sc1:
                         st.markdown(f"#### {money(amount)} — {get_payment_type_label(p_type)}")
                         st.write(f"📅 Data: {h['created_at'][:10]} | Opis: {note}")
+                        if d and (d.get("weekly_advance") or d.get("payment_subtype") == "WEEKLY_FRIDAY_ADVANCE"):
+                            st.info(f"🗓️ **Piątkowa zaliczka** | Tydzień: `{d.get('week_key', '—')}` | Planowany przelew: `{d.get('scheduled_payment_date', '—')}`")
                         if d.get('investor_note'):
                             st.caption(f"Komentarz Inwestora: {d.get('investor_note')}")
                         if d.get('rejection_reason') or (status == PAYMENT_STATUS_REJECTED and h.get('description')):
@@ -3470,7 +3939,7 @@ elif menu == "negotiations":
                 col_a, col_b, col_c = st.columns(3)
                 
                 if col_a.button(f"✅ ZAAKCEPTUJ", key=f"acc_{t['id']}", type="primary", disabled=not can_acc):
-                    if process_task_handshake(t['id'], "ACCEPT", "investor", price=crew_p, comment="Zaakceptowano ofertę Karola"):
+                    if process_task_handshake(t['id'], "ACCEPT", "investor", price=crew_p, comment="Zaakceptowano ofertę Szefa Ekipy"):
                         st.success("Zatwierdzono i zablokowano!")
                         st.rerun()
                 
@@ -3478,7 +3947,7 @@ elif menu == "negotiations":
                 msg = st.text_input("Uzasadnienie", key=f"msg_{t['id']}")
                 if col_b.button("↩️ WYŚLIJ KONTROFERTĘ", key=f"cnt_{t['id']}"):
                     if process_task_handshake(t['id'], "COUNTER_OFFER", "investor", price=new_p, comment=msg):
-                        st.success("Wysłano do Karola.")
+                        st.success("Wysłano do Szefa Ekipy.")
                         st.rerun()
                 
                 with col_c:
@@ -3499,7 +3968,7 @@ elif menu == "settings":
         st.stop()
         
     st.subheader("🏠 Podziel mieszkanie na poszczególne pomieszczenia")
-    st.write("Wpisz tu pokoje, z których Karol będzie mógł budować swój harmonogram.")
+    st.write("Wpisz tu pokoje, z których Szef Ekipy będzie mógł budować swój harmonogram.")
     
     with st.form("add_room_form", clear_on_submit=True):
         col1, col2 = st.columns([3, 1])
@@ -3544,7 +4013,7 @@ elif menu == "settings":
                         .eq("phase_name", old_name)\
                         .execute()
                     updated += 1
-            st.success(f"✅ Nazwy zapisane! Zaktualizowano {updated} pomieszczeń również w planie Karola.")
+            st.success(f"✅ Nazwy zapisane! Zaktualizowano {updated} pomieszczeń również w planie Szefa Ekipy.")
             st.rerun()
     else:
         st.info("Słownik jest pusty. Dodaj pierwszy pokój powyżej.")
