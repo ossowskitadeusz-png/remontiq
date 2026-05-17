@@ -477,6 +477,44 @@ def is_task_completed_for_progress(task):
     return get_task_progress_status(task) in TASK_COMPLETED_STATUSES
 
 
+def render_plan_and_progress_view(project_meta, phase_service):
+    st.title("📋 Plan Remontu")
+    st.caption("Poniżej znajduje się struktura prac ułożona przez Szefa Ekipy, z podziałem na pokoje.")
+    p_id = project_meta.get('id') if project_meta else None
+    if not p_id:
+        st.warning("Najpierw skonfiguruj projekt.")
+        return
+    phases = phase_service.get_phases(p_id)
+    if not phases:
+        st.info("📭 Szef Ekipy nie dodał jeszcze żadnych pomieszczeń do swojego planu.")
+    else:
+        phase_ids = [p.get("id") for p in phases if p.get("id")]
+        all_tasks = []
+        if phase_ids:
+            try:
+                all_tasks_req = supabase.table("tasks").select("*").in_("phase_id", phase_ids).execute()
+                all_tasks = all_tasks_req.data or []
+            except:
+                all_tasks = []
+        # Renderowanie faz z zadaniami
+        for ph in phases:
+            with st.container(border=True):
+                ph_tasks = [t for t in all_tasks if t.get("phase_id") == ph.get("id")]
+                done = sum(1 for t in ph_tasks if is_task_completed_for_progress(t))
+                total = len(ph_tasks)
+                pct = int(done / total * 100) if total > 0 else 0
+                st.markdown(f"### 🏠 {ph.get('phase_name', '—')}  `{pct}%`")
+                st.progress(pct / 100)
+                if ph_tasks:
+                    for t in ph_tasks:
+                        status_icon = "✅" if is_task_completed_for_progress(t) else "🔨"
+                        price = t.get("final_approved_price")
+                        price_str = f"{price:,.0f} zł" if price else "brak ceny"
+                        st.write(f"{status_icon} **{t.get('name')}** — {price_str}")
+                else:
+                    st.caption("Brak zadań w tym pomieszczeniu.")
+
+
 def report_blocker(task_id, description, blocker_type="OTHER"):
     """Zapisuje powód, status przed blokadą i blokuje zadanie."""
     try:
@@ -2214,6 +2252,7 @@ if st.session_state['role'] == "crew":
     menu = st.sidebar.radio("👷 NAWIGACJA", [
         "🚀 Plan na dzisiaj",
         "📝 Plan Remontu",
+        "📋 Plan & Postęp",
         "💰 Moje Finanse",
         "🚨 Blokady i Materiały",
         "💬 Czat Budowy"
@@ -2330,6 +2369,10 @@ if st.session_state['role'] == "crew":
     # Obsługa przycisków funkcyjnych
     if menu == "📝 Plan Remontu":
         render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
+        st.stop()
+        
+    elif menu == "📋 Plan & Postęp":
+        render_plan_and_progress_view(project_meta, phase_service)
         st.stop()
         
     elif menu == "💰 Moje Finanse":
@@ -3024,41 +3067,7 @@ elif menu == "chat":
     )
 
 elif menu == "plan":
-    st.title("📋 Plan Remontu")
-    st.caption("Poniżej znajduje się struktura prac ułożona przez Szefa Ekipy, z podziałem na pokoje.")
-    p_id = project_meta.get('id') if project_meta else None
-    if not p_id:
-        st.warning("Najpierw skonfiguruj projekt.")
-        st.stop()
-    phases = phase_service.get_phases(p_id)
-    if not phases:
-        st.info("📭 Szef Ekipy nie dodał jeszcze żadnych pomieszczeń do swojego planu.")
-    else:
-        phase_ids = [p.get("id") for p in phases if p.get("id")]
-        all_tasks = []
-        if phase_ids:
-            try:
-                all_tasks_req = supabase.table("tasks").select("*").in_("phase_id", phase_ids).execute()
-                all_tasks = all_tasks_req.data or []
-            except:
-                all_tasks = []
-        # Renderowanie faz z zadaniami (widok Inwestora)
-        for ph in phases:
-            with st.container(border=True):
-                ph_tasks = [t for t in all_tasks if t.get("phase_id") == ph.get("id")]
-                done = sum(1 for t in ph_tasks if is_task_completed_for_progress(t))
-                total = len(ph_tasks)
-                pct = int(done / total * 100) if total > 0 else 0
-                st.markdown(f"### 🏠 {ph.get('phase_name', '—')}  `{pct}%`")
-                st.progress(pct / 100)
-                if ph_tasks:
-                    for t in ph_tasks:
-                        status_icon = "✅" if is_task_completed_for_progress(t) else "🔨"
-                        price = t.get("final_approved_price")
-                        price_str = f"{price:,.0f} zł" if price else "brak ceny"
-                        st.write(f"{status_icon} **{t.get('name')}** — {price_str}")
-                else:
-                    st.caption("Brak zadań w tym pomieszczeniu.")
+    render_plan_and_progress_view(project_meta, phase_service)
 
 elif menu == "charter":
     st.title("🏗️ Informacje o Projekcie")
