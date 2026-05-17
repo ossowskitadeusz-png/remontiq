@@ -1728,7 +1728,8 @@ if st.session_state['role'] == "crew":
     # (Opcja 🏗️ Plan Remontu 2.0 została przeniesiona do głównego przycisku)
 
     elif menu == "🚀 Plan na dzisiaj":
-        render_crew_panel(supabase, phase_service, negotiation_service, change_service, task_service, ordering_service)
+        from panels.crew_execution_panel import render_crew_execution_panel
+        render_crew_execution_panel(supabase, task_service)
         st.stop()
         
     elif menu == "🚨 Blokady i Materiały":
