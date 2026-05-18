@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 .env
+scratch/
+check_supabase2.py
+
