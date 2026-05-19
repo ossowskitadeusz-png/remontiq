@@ -18,13 +18,73 @@ class OrderingService:
         logger.info(f"OrderingService v2.2 initialized. USE_NEW_DEPENDENCIES={USE_NEW_DEPENDENCIES}")
 
     # ========================================================================
+    # HELPER LOGIC FOR SELF-HEALING
+    # ========================================================================
+
+    def _stable_task_sort_key(self, task: Dict):
+        """Klucz do stabilnego sortowania zadań: najpierw poprawny sort_order, potem czas utworzenia, na końcu ID."""
+        sort_order = task.get("sort_order")
+        has_valid_order = isinstance(sort_order, int) and sort_order is not None
+        return (
+            not has_valid_order,
+            sort_order if has_valid_order else 999999,
+            str(task.get("created_at") or ""),
+            str(task.get("id") or "")
+        )
+
+    def _needs_sort_order_healing(self, tasks: List[Dict]) -> bool:
+        """Sprawdza, czy zadania w danej fazie wymagają uzdrowienia kolejności."""
+        if not tasks:
+            return False
+        
+        orders = []
+        for t in tasks:
+            val = t.get("sort_order")
+            if val is None or not isinstance(val, int):
+                return True
+            orders.append(val)
+            
+        if len(set(orders)) != len(tasks):
+            return True
+            
+        orders.sort()
+        if orders != list(range(len(tasks))):
+            return True
+            
+        return False
+
+    def _ensure_valid_sort_orders(self, phase_id: str) -> bool:
+        """Upewnia się, że zadania w danej fazie mają ciągłe, bezduplikatowe indeksy sort_order (0..N-1)."""
+        try:
+            res = self.supabase.table("tasks")\
+                .select("id, sort_order, created_at")\
+                .eq("phase_id", phase_id)\
+                .execute()
+            tasks = res.data or []
+            if not tasks:
+                return True
+                
+            if self._needs_sort_order_healing(tasks):
+                sorted_tasks = sorted(tasks, key=self._stable_task_sort_key)
+                for idx, t in enumerate(sorted_tasks):
+                    if t.get("sort_order") != idx:
+                        self.supabase.table("tasks").update({"sort_order": idx}).eq("id", t["id"]).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to ensure valid sort orders: {e}")
+            return False
+
+    # ========================================================================
     # UI METHODS (Dla Panelu Karola)
     # ========================================================================
     
     def get_ordered_tasks(self, phase_id: str) -> List[Dict]:
         try:
+            # Samoleczenie przed pobraniem
+            self._ensure_valid_sort_orders(phase_id)
+            
             res = self.supabase.table("tasks")\
-                .select("id, name, state, sort_order, final_approved_price, commercial_status, kanban_status")\
+                .select("id, name, state, sort_order, final_approved_price, commercial_status, kanban_status, description")\
                 .eq("phase_id", phase_id)\
                 .order("sort_order")\
                 .execute()
@@ -59,26 +119,44 @@ class OrderingService:
 
     def _move_task(self, task_id: str, direction: int) -> bool:
         try:
-            task_res = self.supabase.table("tasks").select("id, phase_id, sort_order").eq("id", task_id).single().execute()
+            task_res = self.supabase.table("tasks").select("id, phase_id").eq("id", task_id).single().execute()
             task = task_res.data
-            if not task: return False
+            if not task: 
+                logger.error(f"Task {task_id} not found.")
+                return False
             
-            neighbor_order = task['sort_order'] + direction
-            neighbor_res = self.supabase.table("tasks")\
+            phase_id = task["phase_id"]
+            self._ensure_valid_sort_orders(phase_id)
+            
+            res = self.supabase.table("tasks")\
                 .select("id, sort_order")\
-                .eq("phase_id", task['phase_id'])\
-                .eq("sort_order", neighbor_order)\
+                .eq("phase_id", phase_id)\
+                .order("sort_order")\
                 .execute()
+            tasks = res.data or []
             
-            if neighbor_res.data:
-                neighbor = neighbor_res.data[0]
-                updates = [
-                    {"id": task['id'], "sort_order": neighbor_order},
-                    {"id": neighbor['id'], "sort_order": task['sort_order']}
-                ]
-                self.supabase.table("tasks").upsert(updates).execute()
+            task_index = -1
+            for idx, t in enumerate(tasks):
+                if t["id"] == task_id:
+                    task_index = idx
+                    break
+                    
+            if task_index == -1:
+                logger.error(f"Task {task_id} not found after healing.")
+                return False
+                
+            neighbor_index = task_index + direction
+            if neighbor_index < 0 or neighbor_index >= len(tasks):
+                # Poza zakresem - no-op (zwracamy True)
                 return True
-            return False
+                
+            task_to_move = tasks[task_index]
+            neighbor_task = tasks[neighbor_index]
+            
+            # Zamiana indeksów sort_order
+            self.supabase.table("tasks").update({"sort_order": neighbor_task["sort_order"]}).eq("id", task_to_move["id"]).execute()
+            self.supabase.table("tasks").update({"sort_order": task_to_move["sort_order"]}).eq("id", neighbor_task["id"]).execute()
+            return True
         except Exception as e:
             logger.error(f"Move task failed: {e}")
             return False
@@ -109,3 +187,4 @@ class OrderingService:
 
     def diagnose_dependencies(self, task_id: str) -> Dict:
         return {"current_source": "table" if USE_NEW_DEPENDENCIES else "json"}
+

@@ -347,12 +347,16 @@ def render_crew_planning_module(task_service, ordering_service, project_id, phas
                         m1, m2 = st.columns(2)
                         with m1:
                             if st.button("⬆️", key=f"up_{task['id']}", disabled=(idx==0), help="Przesuń wyżej"):
-                                ordering_service.move_task_up(task['id'])
-                                st.rerun()
+                                if ordering_service.move_task_up(task['id']):
+                                    st.rerun()
+                                else:
+                                    st.error("Nie udało się zmienić kolejności zadania. Odśwież i spróbuj ponownie.")
                         with m2:
                             if st.button("⬇️", key=f"down_{task['id']}", disabled=(idx==len(ordered_tasks)-1), help="Przesuń niżej"):
-                                ordering_service.move_task_down(task['id'])
-                                st.rerun()
+                                if ordering_service.move_task_down(task['id']):
+                                    st.rerun()
+                                else:
+                                    st.error("Nie udało się zmienić kolejności zadania. Odśwież i spróbuj ponownie.")
 
                     # Zabezpieczenie: jeśli zadanie ma cenę lub nie jest w fazie szkicu - blokujemy edycję/usuwanie
                     is_locked = bool(task.get('final_price')) or task['status'] != 'PENDING'

@@ -18,6 +18,17 @@ class TaskService:
             "------------------------\n\n"
         )
         
+        # Oblicz sort_order = max + 1 dla nowo dodawanego zadania w danej fazie
+        sort_order = 0
+        try:
+            res_tasks = self.supabase.table("tasks").select("sort_order").eq("phase_id", phase_id).execute()
+            if res_tasks.data:
+                orders = [t.get('sort_order') for t in res_tasks.data if t.get('sort_order') is not None]
+                if orders:
+                    sort_order = max(orders) + 1
+        except Exception:
+            pass
+
         data = {
             "project_id": project_id,
             "phase_id": phase_id,
@@ -25,11 +36,11 @@ class TaskService:
             "description": initial_handshake + description,
             "kanban_status": "TODO",
             "state": "DRAFT",
+            "sort_order": sort_order,
             "estimated_duration_days": estimated_duration_days if estimated_duration_days is not None else 1,
             "created_at": datetime.now().isoformat()
         }
 
-        
         res = self.supabase.table("tasks").insert(data).execute()
         return res.data[0] if res.data else {}
 
