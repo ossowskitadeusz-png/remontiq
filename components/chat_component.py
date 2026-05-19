@@ -5,6 +5,21 @@ import streamlit as st
 import html
 from services.chat_service import ChatService
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+def format_chat_timestamp(created_at_str):
+    """Parsuje ISO timestamp z bazy, konwertuje do Europe/Warsaw i zwraca sformatowany ciąg."""
+    if not created_at_str:
+        return ""
+    try:
+        iso_str = str(created_at_str).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt_local = dt.astimezone(ZoneInfo("Europe/Warsaw"))
+        return dt_local.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(created_at_str)[:16].replace("T", " ")
 
 @st.fragment(run_every=5)
 def render_messages_stream(chat_service, selected_project_id):
@@ -41,10 +56,11 @@ def render_messages_stream(chat_service, selected_project_id):
             if is_system:
                 # Wiadomości systemowe — alerty na pełnej szerokości
                 system_content_esc = html.escape(str(msg.get('content','')))
+                system_time = format_chat_timestamp(msg.get('created_at',''))
                 st.markdown(
                     f"""<div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3);
                     border-radius:10px; padding:10px 16px; margin:8px 0; font-size:13px; color:#dc2626;">
-                    🤖 <b>System</b> · {msg.get('created_at','')[:16]}<br>
+                    🤖 <b>System</b> · {system_time}<br>
                     {system_content_esc}
                     </div>""",
                     unsafe_allow_html=True
@@ -55,8 +71,10 @@ def render_messages_stream(chat_service, selected_project_id):
                 with st.chat_message(align):
                     author_esc = html.escape(str(msg.get('author_name', 'Ktoś')))
                     content_esc = html.escape(str(msg.get('content', '')))
-                    st.write(f"**{icon} {author_esc}**: {content_esc}")
-                    st.caption(msg.get('created_at', '')[:16])
+                    st.markdown(f"**{icon} {author_esc}**")
+                    st.write(content_esc)
+                    st.caption(format_chat_timestamp(msg.get('created_at')))
+
 
 
 def render_chat_component(supabase, user_id, user_role, project_id=None):
