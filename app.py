@@ -118,7 +118,12 @@ def get_supabase() -> Client:
 try:
     supabase = get_supabase()
 except Exception as e:
-    st.error("Błąd połączenia z Supabase. Sprawdź plik secrets.toml.")
+    st.error("Błąd połączenia z Supabase.")
+    st.code(f"{type(e).__name__}: {str(e)}")
+    st.info(
+        "Sprawdź w Streamlit Cloud → Settings → Secrets, czy ustawiono "
+        "SUPABASE_URL oraz SUPABASE_SERVICE_ROLE_KEY."
+    )
     st.stop()
 
 # ============================================================================
