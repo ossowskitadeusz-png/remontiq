@@ -19,7 +19,8 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     
     # Inicjalizacja serwisów
     if not supabase:
-        supabase = create_client(st.secrets["supabase_url"], st.secrets["supabase_key"])
+        from services.supabase_client import get_supabase_client
+        supabase = get_supabase_client()
     if not negotiation_service:
         negotiation_service = NegotiationService(supabase)
     if not phase_service:

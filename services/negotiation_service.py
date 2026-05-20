@@ -30,10 +30,8 @@ class NegotiationService:
         if supabase_client:
             self.supabase = supabase_client
         else:
-            self.supabase = create_client(
-                st.secrets["supabase_url"],
-                st.secrets["supabase_key"]
-            )
+            from services.supabase_client import get_supabase_client
+            self.supabase = get_supabase_client()
     
     # =====================================================
     # CORE OPERATIONS - PROPOZYCJE

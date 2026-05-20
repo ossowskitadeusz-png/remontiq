@@ -6,26 +6,13 @@ import sys
 import os
 from supabase import create_client
 
-# Dynamicznie pobierz dane z env lub .streamlit/secrets.toml
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+from services.supabase_client import get_supabase_client
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    try:
-        import toml
-        secrets_path = os.path.join(".streamlit", "secrets.toml")
-        if os.path.exists(secrets_path):
-            secrets = toml.load(secrets_path)
-            SUPABASE_URL = secrets.get("supabase", {}).get("url")
-            SUPABASE_KEY = secrets.get("supabase", {}).get("key")
-    except Exception:
-        pass
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("Missing SUPABASE_URL or SUPABASE_KEY environment variables.")
+try:
+    supabase = get_supabase_client()
+except Exception as e:
+    print(f"Error initializing Supabase client: {e}")
     sys.exit(1)
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def check(label, fn):
     try:

@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+.env.*
 scratch/
 check_supabase2.py
 

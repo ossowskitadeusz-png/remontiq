@@ -112,9 +112,8 @@ apply_saas_theme()
 
 @st.cache_resource
 def get_supabase() -> Client:
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
-    return create_client(url, key)
+    from services.supabase_client import get_supabase_client
+    return get_supabase_client()
 
 try:
     supabase = get_supabase()
