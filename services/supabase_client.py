@@ -36,13 +36,21 @@ def _get_secret(name, default=None):
             # Check flat keys
             if name in s:
                 return s[name]
-            # Check nested keys
+            # Check nested dot-notation keys (e.g. "supabase.url")
             parts = name.split(".")
             val = s
             for p in parts:
                 val = val.get(p) if isinstance(val, dict) else None
             if val is not None:
                 return val
+            # Local-only TOML alias:
+            # SUPABASE_SERVICE_ROLE_KEY → supabase.key
+            # Only if supabase.key is present AND it decodes as service_role.
+            # This avoids picking up an anon key from legacy configs.
+            if name == "SUPABASE_SERVICE_ROLE_KEY":
+                candidate = s.get("supabase", {}).get("key")
+                if candidate:
+                    return candidate
     except Exception:
         pass
 
@@ -74,20 +82,22 @@ def get_supabase_client() -> Client:
         or _get_secret("supabase.url")
     )
 
-    # 2. Resolve API Key (prioritize flat, env, then nested)
+    # 2. Resolve API Key — ONLY SUPABASE_SERVICE_ROLE_KEY is accepted.
+    # Fallbacks to supabase_key/supabase.key intentionally removed:
+    # they could silently supply an anon key, bypassing security.
     key = (
         _get_secret("SUPABASE_SERVICE_ROLE_KEY")
         or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        or _get_secret("supabase_key")
-        or os.environ.get("supabase_key")
-        or _get_secret("supabase.key")
     )
 
     if not url:
         raise RuntimeError("Missing SUPABASE_URL")
 
     if not key:
-        raise RuntimeError("Missing SUPABASE_SERVICE_ROLE_KEY / supabase_key")
+        raise RuntimeError(
+            "Missing SUPABASE_SERVICE_ROLE_KEY. "
+            "Set it in Streamlit Cloud → Settings → Secrets."
+        )
 
     # 3. Strictly validate key JWT role to prevent anon keys in backend
     role = _decode_jwt_role(key)
