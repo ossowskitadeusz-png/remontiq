@@ -73,25 +73,34 @@ def get_supabase_client() -> Client:
     Get a fully authenticated Supabase client, strictly validated to ensure
     the key corresponds to the 'service_role' admin role.
     """
-    # 1. Resolve URL (prioritize flat, env, then nested)
+    # 1. Resolve URL
+    # Supports flat key (SUPABASE_URL = "...") AND nested [supabase] section:
+    #   [supabase]
+    #   SUPABASE_URL = "..."
     url = (
         _get_secret("SUPABASE_URL")
         or os.environ.get("SUPABASE_URL")
+        or _get_secret("supabase.SUPABASE_URL")  # nested [supabase] section
         or _get_secret("supabase_url")
         or os.environ.get("supabase_url")
-        or _get_secret("supabase.url")
+        or _get_secret("supabase.url")           # nested [supabase], lowercase key
     )
 
     # 2. Resolve API Key — ONLY SUPABASE_SERVICE_ROLE_KEY is accepted.
+    # Supports flat key AND nested [supabase] section.
     # Fallbacks to supabase_key/supabase.key intentionally removed:
     # they could silently supply an anon key, bypassing security.
     key = (
         _get_secret("SUPABASE_SERVICE_ROLE_KEY")
         or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or _get_secret("supabase.SUPABASE_SERVICE_ROLE_KEY")  # nested [supabase] section
     )
 
     if not url:
-        raise RuntimeError("Missing SUPABASE_URL")
+        raise RuntimeError(
+            "Missing SUPABASE_URL. "
+            "Set it flat: SUPABASE_URL = '...' or inside [supabase] section in Secrets."
+        )
 
     if not key:
         raise RuntimeError(
