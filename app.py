@@ -2413,15 +2413,68 @@ if st.session_state['role'] == "crew":
     
     if not st.session_state.splash_done:
         user_name_esc = html.escape(str(st.session_state.get("user_name", "EKIPA"))).upper()
-        st.markdown(f"""
-        <div style="height: 70vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #1e293b 0%, #334155 100%); border-radius: 30px; color: white; text-align: center; padding: 40px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);">
-            <div style="font-size: 100px; margin-bottom: 20px;">🏗️</div>
-            <h1 style="font-size: 50px; font-weight: 900; margin: 0;">DZIEŃ DOBRY {user_name_esc}!</h1>
-            <p style="font-size: 24px; opacity: 0.8; margin-top: 10px;">Dziś jest {datetime.now().strftime('%A, %d.%m.%Y')}</p>
-            <p style="font-size: 18px; margin-top: 30px; font-style: italic;">"Dobry plan to połowa sukcesu."</p>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("🚀 WEJDŹ NA BUDOWĘ", use_container_width=True, type="primary"):
+        
+        st.markdown("## 🏗️ Poranna odprawa")
+        st.markdown(f"**Dziś jest {datetime.now().strftime('%A, %d.%m.%Y')}**")
+        st.markdown(f"Witaj, **{user_name_esc}**!")
+        st.markdown("---")
+
+        tasks_data = []
+        try:
+            if p_id:
+                res = supabase.table("tasks").select("*").eq("project_id", p_id).execute()
+                tasks_data = res.data or []
+        except Exception as e:
+            st.warning("Nie udało się pobrać zadań z serwera. Spróbuj odświeżyć.")
+
+        attention_statuses = ["REJECTED", "CHANGES_REQUESTED", "BLOCKED"]
+        review_statuses = ["AWAITING_INSPECTION", "READY_FOR_REVIEW", "READY_FOR_ACCEPTANCE"]
+        
+        needs_attention = [t for t in tasks_data if t.get("kanban_status") in attention_statuses or t.get("status") in attention_statuses]
+        in_progress = [t for t in tasks_data if t.get("kanban_status") == "IN_PROGRESS" or t.get("status") == "IN_PROGRESS"]
+        to_review = [t for t in tasks_data if t.get("kanban_status") in review_statuses or t.get("status") in review_statuses]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🚨 Wymaga uwagi", len(needs_attention))
+        c2.metric("👷 W trakcie", len(in_progress))
+        c3.metric("✅ Do odbioru", len(to_review))
+
+        st.markdown("---")
+        st.subheader("👷 Aktualnie w trakcie")
+        if in_progress:
+            for t in in_progress[:5]:
+                with st.container(border=True):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        # Assuming phase_id can be used if phase_name isn't present, but phase_name is usually handled. We will safely get it.
+                        room_name = t.get("phase_name") or "Nieznane pomieszczenie"
+                        st.markdown(f"**{t.get('name', 'Brak nazwy')}**")
+                        st.caption(f"Pomieszczenie: {room_name}")
+                    with col2:
+                        if st.button("✅ Zgłoś do odbioru", key=f"finish_{t['id']}", use_container_width=True):
+                            try:
+                                supabase.table("tasks").update({"kanban_status": "AWAITING_INSPECTION", "updated_at": datetime.now().isoformat()}).eq("id", t['id']).execute()
+                                st.success("Zgłoszono do odbioru!")
+                                st.rerun()
+                            except Exception as e:
+                                st.warning("Nie udało się zaktualizować statusu zadania.")
+        else:
+            st.info("Brak zadań w trakcie.")
+
+        st.markdown("---")
+        st.subheader("🚨 Wymaga uwagi")
+        if needs_attention:
+            for t in needs_attention[:3]:
+                with st.container(border=True):
+                    room_name = t.get("phase_name") or "Nieznane pomieszczenie"
+                    status = t.get("kanban_status") or t.get("status") or "BLOCKED"
+                    st.markdown(f"**{t.get('name', 'Brak nazwy')}**")
+                    st.caption(f"Pomieszczenie: {room_name} | Status: {status}")
+        else:
+            st.success("Brak pilnych spraw. Można działać dalej.")
+
+        st.markdown("---")
+        if st.button("🚀 Przejdź do pełnego planu", use_container_width=True, type="primary"):
             st.session_state.splash_done = True
             st.rerun()
         st.stop()
