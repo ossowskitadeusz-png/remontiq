@@ -56,8 +56,51 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
         return
     
     project_options = {p["project_name"]: p["id"] for p in projects}
-    selected_project_name = st.selectbox("📋 Wybierz projekt", options=project_options.keys(), key="investor_project_select")
+    options_list = list(project_options.keys()) + ["➕ Dodaj nowy projekt"]
+    
+    # Próba wybrania aktywnego z sesji
+    default_idx = 0
+    current_session_id = st.session_state.get("current_project_id")
+    if current_session_id:
+        for idx, p_name in enumerate(project_options.keys()):
+            if project_options[p_name] == current_session_id:
+                default_idx = idx
+                break
+                
+    selected_project_name = st.selectbox("📋 Wybierz projekt", options=options_list, index=default_idx, key="investor_project_select")
+    
+    if selected_project_name == "➕ Dodaj nowy projekt":
+        st.markdown("### 🆕 Utwórz Nowy Projekt")
+        with st.form("new_project_form_investor"):
+            p_name = st.text_input("Nazwa projektu (np. Mieszkanie Wilanów)")
+            p_budget = st.number_input("Budżet całkowity (PLN)", min_value=10000, value=100000, step=5000)
+            from datetime import date
+            p_start = st.date_input("Planowany start", value=date.today())
+            c_name = st.text_input("Imię Szefa Ekipy", value="Ekipa")
+            if st.form_submit_button("Utwórz projekt"):
+                if p_name.strip():
+                    user_id = st.session_state.get("user_id", "00000000-0000-0000-0000-000000000001")
+                    res = supabase.table("project_metadata").insert({
+                        "project_name": p_name.strip(),
+                        "total_budget": p_budget,
+                        "planned_start_date": str(p_start),
+                        "crew_lead_name": c_name.strip(),
+                        "user_id": user_id,
+                        "status": "PLANNING"
+                    }).execute()
+                    if res.data:
+                        st.session_state["current_project_id"] = res.data[0]["id"]
+                        st.success("Projekt utworzony! Ładowanie...")
+                        st.rerun()
+                else:
+                    st.error("Podaj nazwę projektu.")
+        return
+
     selected_project_id = project_options[selected_project_name]
+    
+    if st.session_state.get("current_project_id") != selected_project_id:
+        st.session_state["current_project_id"] = selected_project_id
+        st.rerun()
     
     st.markdown("---")
     

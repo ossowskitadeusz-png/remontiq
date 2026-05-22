@@ -298,7 +298,17 @@ def process_task_handshake(task_id, action, actor_role, price=None, comment=""):
 
 def get_project_metadata():
     try:
-        res = supabase.table("project_metadata").select("*").order("created_at", desc=True).limit(1).execute()
+        query = supabase.table("project_metadata").select("*")
+        if st.session_state.get("current_project_id"):
+            query = query.eq("id", st.session_state["current_project_id"])
+        else:
+            query = query.order("created_at", desc=True).limit(1)
+            
+        res = query.execute()
+        
+        if res.data and not st.session_state.get("current_project_id"):
+            st.session_state["current_project_id"] = res.data[0]["id"]
+            
         return res.data[0] if res.data else None
     except Exception as e:
         st.error(f"❌ Błąd pobierania metadanych: {e}")
