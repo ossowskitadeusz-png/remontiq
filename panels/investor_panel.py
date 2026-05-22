@@ -184,7 +184,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                         extras_amount = sum(float(t.get('final_approved_price') or 0) for t in room_tasks if "[LUMP_SUM_ROOM]" not in (t.get('description') or '') and t.get('commercial_status') == 'approved')
                         room_approved = lump_sum_amount + extras_amount
                         st.markdown(f"#### 📦 {p['phase_name']} 🔒 `RYCZAŁT`")
-                        st.markdown(f"**Ryczałt:** `<span style='color:#10b981; font-weight:bold;'>{lump_sum_amount:,.0f} zł</span>` | **Roboty dodatkowe:** `<span style='color:#10b981; font-weight:bold;'>{extras_amount:,.0f} zł</span>` | **Razem:** `<span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>`", unsafe_allow_html=True)
+                        st.markdown(f"**Ryczałt:** <span style='color:#10b981; font-weight:bold;'>{lump_sum_amount:,.0f} zł</span> | **Roboty dodatkowe:** <span style='color:#10b981; font-weight:bold;'>{extras_amount:,.0f} zł</span> | **Razem:** <span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>", unsafe_allow_html=True)
                         
                         ryczalt_i_wliczone = [t for t in room_tasks if "[LUMP_SUM_ROOM]" in (t.get('description') or '') or float(t.get('final_price') or t.get('final_approved_price') or 0) == 0 or "[INCLUDED_IN_LUMP_SUM]" in (t.get('description') or '')]
                         dodatkowe = [t for t in room_tasks if t not in ryczalt_i_wliczone]
@@ -214,7 +214,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                     else:
                         room_approved = sum(float(t.get('final_approved_price') or 0) for t in room_tasks if t.get('commercial_status') == 'approved')
                         st.markdown(f"#### 📦 {p['phase_name']}")
-                        st.markdown(f"**Suma zatwierdzonych prac:** `<span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>`", unsafe_allow_html=True)
+                        st.markdown(f"**Suma zatwierdzonych prac:** <span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>", unsafe_allow_html=True)
                         
                         if room_tasks:
                             task_data = []
