@@ -176,48 +176,66 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                 room_tasks = [t for t in all_project_tasks if t.get('phase_id') == phase_id]
                 
                 # Obliczanie sum dla tego pokoju
-                room_approved = sum(float(t.get('final_approved_price') or 0) for t in room_tasks if t.get('commercial_status') == 'approved')
+                has_lump_sum = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in room_tasks)
                 
-                # Nagłówek pomieszczenia w formie karty ze spisem kosztów
                 with st.container(border=True):
-                    # Sprawdzamy czy w tym pomieszczeniu jest ryczałt
-                    has_lump_sum = any("[LUMP_SUM_ROOM]" in (t.get('description') or '') for t in room_tasks)
-                    lump_sum_suffix = " 🔒 `RYCZAŁT`" if has_lump_sum else ""
-                    
-                    st.markdown(f"#### 📦 {p['phase_name']}{lump_sum_suffix}")
-                    st.markdown(f"**Suma zatwierdzonych prac:** `<span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>`", unsafe_allow_html=True)
-                    
-                    if room_tasks:
-                        # Przygotowanie tabeli/listy zadań
-                        task_data = []
-                        for t in room_tasks:
-                            price_val = t.get('final_approved_price')
-                            
-                            # Status handshaku
-                            status_db = t.get('commercial_status') or 'pending'
-                            if status_db == 'approved':
-                                status_desc = "✅ Zaakceptowane"
-                                price_str = f"{price_val:,.0f} zł"
-                            else:
-                                status_desc = "⏳ Wycena/Negocjacje"
-                                price_str = "W ustaleniach"
-                                
-                            task_data.append({
-                                "Zadanie / Robota": t['name'],
-                                "Status Wyceny": status_desc,
-                                "Koszt (PLN)": price_str
-                            })
-                            
-                        # Konwertujemy na DataFrame, aby wyświetlić piękną tabelę
-                        df_tasks = pd.DataFrame(task_data)
-                        st.table(df_tasks)
+                    if has_lump_sum:
+                        lump_sum_amount = sum(float(t.get('final_approved_price') or 0) for t in room_tasks if "[LUMP_SUM_ROOM]" in (t.get('description') or '') and t.get('commercial_status') == 'approved')
+                        extras_amount = sum(float(t.get('final_approved_price') or 0) for t in room_tasks if "[LUMP_SUM_ROOM]" not in (t.get('description') or '') and t.get('commercial_status') == 'approved')
+                        room_approved = lump_sum_amount + extras_amount
+                        st.markdown(f"#### 📦 {p['phase_name']} 🔒 `RYCZAŁT`")
+                        st.markdown(f"**Ryczałt:** `<span style='color:#10b981; font-weight:bold;'>{lump_sum_amount:,.0f} zł</span>` | **Roboty dodatkowe:** `<span style='color:#10b981; font-weight:bold;'>{extras_amount:,.0f} zł</span>` | **Razem:** `<span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>`", unsafe_allow_html=True)
+                        
+                        ryczalt_i_wliczone = [t for t in room_tasks if "[LUMP_SUM_ROOM]" in (t.get('description') or '') or float(t.get('final_price') or t.get('final_approved_price') or 0) == 0 or "[INCLUDED_IN_LUMP_SUM]" in (t.get('description') or '')]
+                        dodatkowe = [t for t in room_tasks if t not in ryczalt_i_wliczone]
+
+                        def draw_investor_tasks(tasks_list, title):
+                            if tasks_list:
+                                st.markdown(f"##### {title}")
+                                t_data = []
+                                for t in tasks_list:
+                                    price_val = t.get('final_approved_price') or 0
+                                    status_db = t.get('commercial_status') or 'pending'
+                                    if "[INCLUDED_IN_LUMP_SUM]" in (t.get('description') or ''):
+                                        status_desc = "📦 Wliczone w ryczałt"
+                                        price_str = "0 zł"
+                                    elif status_db == 'approved':
+                                        status_desc = "✅ Zaakceptowane"
+                                        price_str = f"{price_val:,.0f} zł"
+                                    else:
+                                        status_desc = "⏳ Wycena/Negocjacje"
+                                        price_str = "W ustaleniach"
+                                    t_data.append({"Zadanie / Robota": t['name'], "Status Wyceny": status_desc, "Koszt (PLN)": price_str})
+                                st.table(pd.DataFrame(t_data))
+
+                        draw_investor_tasks(ryczalt_i_wliczone, "Prace wliczone w ryczałt")
+                        draw_investor_tasks(dodatkowe, "Roboty dodatkowe płatne")
+
                     else:
-                        st.caption("Brak zaplanowanych zadań w tym pomieszczeniu.")
+                        room_approved = sum(float(t.get('final_approved_price') or 0) for t in room_tasks if t.get('commercial_status') == 'approved')
+                        st.markdown(f"#### 📦 {p['phase_name']}")
+                        st.markdown(f"**Suma zatwierdzonych prac:** `<span style='color:#10b981; font-weight:bold; font-size:16px;'>{room_approved:,.0f} zł</span>`", unsafe_allow_html=True)
+                        
+                        if room_tasks:
+                            task_data = []
+                            for t in room_tasks:
+                                price_val = t.get('final_approved_price')
+                                status_db = t.get('commercial_status') or 'pending'
+                                if status_db == 'approved':
+                                    status_desc = "✅ Zaakceptowane"
+                                    price_str = f"{price_val:,.0f} zł"
+                                else:
+                                    status_desc = "⏳ Wycena/Negocjacje"
+                                    price_str = "W ustaleniach"
+                                task_data.append({"Zadanie / Robota": t['name'], "Status Wyceny": status_desc, "Koszt (PLN)": price_str})
+                            st.table(pd.DataFrame(task_data))
+                        else:
+                            st.caption("Brak zaplanowanych zadań w tym pomieszczeniu.")
 
     with tab_timeline:
         from components.timeline_widget import render_timeline_widget
         st.subheader("🕒 Oś Czasu Projektu")
-        render_timeline_widget(timeline_service, selected_project_id)
+        render_timeline_widget(timeline_service, selected_project_id, ordering_service=ordering_service)
 
     with tab_rooms:
         st.subheader("🏠 Podziel mieszkanie na poszczólne pomieszczenia")

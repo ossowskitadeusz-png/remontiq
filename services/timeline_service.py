@@ -90,12 +90,83 @@ class TimelineService:
         }
     
     # =====================================================
-    # 2. TIMELINE CAŁEGO PROJEKTU
+    # 2. SEKWENCYJNE DATY ZADAŃ (integracja z OrderingService)
+    # =====================================================
+
+    def calculate_sequential_dates_for_phase(self, phase_id: str, ordering_service=None) -> List[Dict]:
+        """
+        Liczy datę startu i końca każdego zadania kaskadowo,
+        bazując na kolejności Karola (sort_order) i planned_start_date fazy.
+
+        Logika:
+          zadanie #1 → start = planned_start_date fazy
+          zadanie #2 → start = koniec zadania #1
+          zadanie #3 → start = koniec zadania #2
+          itd.
+
+        Returns: lista zadań wzbogacona o klucze:
+          'seq_start'      - datetime obliczony start
+          'seq_end'        - datetime obliczony koniec
+          'seq_start_str'  - czytelny string "DD Mon"
+          'seq_end_str'    - czytelny string "DD Mon"
+          'duration_days'  - liczba dni (z bazy lub domyślnie 1)
+        """
+        try:
+            # 1. Pobierz datę startu fazy
+            phase_res = self.supabase.table("project_phases").select(
+                "planned_start_date"
+            ).eq("id", phase_id).single().execute()
+
+            phase_data = phase_res.data
+            if not phase_data or not phase_data.get("planned_start_date"):
+                # Fallback: zaczynamy od dziś
+                phase_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            else:
+                raw = phase_data["planned_start_date"]
+                phase_start = datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+
+            # 2. Pobierz zadania posortowane (przez OrderingService jeśli dostępny)
+            if ordering_service:
+                tasks = ordering_service.get_ordered_tasks(phase_id)
+            else:
+                res = self.supabase.table("tasks").select(
+                    "id, name, estimated_duration_days, sort_order, kanban_status, final_approved_price, commercial_status"
+                ).eq("phase_id", phase_id).order("sort_order").execute()
+                tasks = res.data or []
+
+            # 3. Oblicz kaskadowo daty
+            current_start = phase_start
+            result = []
+
+            for task in tasks:
+                duration = int(task.get("estimated_duration_days") or 1)
+                task_end = current_start + timedelta(days=duration)
+
+                enriched = dict(task)
+                enriched["seq_start"]     = current_start
+                enriched["seq_end"]       = task_end
+                enriched["seq_start_str"] = current_start.strftime("%d %b")
+                enriched["seq_end_str"]   = task_end.strftime("%d %b")
+                enriched["duration_days"] = duration
+                result.append(enriched)
+
+                # Następne zadanie zaczyna się po zakończeniu tego
+                current_start = task_end
+
+            return result
+
+        except Exception as e:
+            print(f"⚠️ calculate_sequential_dates_for_phase error: {e}")
+            return []
+
+    # =====================================================
+    # 3. TIMELINE CAŁEGO PROJEKTU
     # =====================================================
     
-    def get_project_timeline(self, project_id: str) -> Dict:
+    def get_project_timeline(self, project_id: str, ordering_service=None) -> Dict:
         """
         Pobiera wszystkie fazy projektu z ich progresem.
+        Jeśli przekazany ordering_service, dołącza sekwencyjne daty zadań.
         """
         
         phases_res = self.supabase.table("project_phases").select("*").eq(
@@ -112,6 +183,13 @@ class TimelineService:
         
         for phase in phases:
             progress = self.get_phase_progress(phase['id'])
+            # Dołącz sekwencyjne daty zadań jeśli mamy ordering_service
+            if ordering_service:
+                progress['sequential_tasks'] = self.calculate_sequential_dates_for_phase(
+                    phase['id'], ordering_service
+                )
+            else:
+                progress['sequential_tasks'] = []
             phase_details.append(progress)
             total_progress += progress['progress_percent']
         

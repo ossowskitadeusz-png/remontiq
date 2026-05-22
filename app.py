@@ -2408,10 +2408,9 @@ if menu == "logout":
 if st.session_state['role'] == "crew":
     p_id = project_meta.get('id') if project_meta else None
     
-    # --- EKRAN POWITALNY (Splash) ---
-    if "splash_done" not in st.session_state: st.session_state.splash_done = False
+    if "daily_briefing_done" not in st.session_state: st.session_state.daily_briefing_done = False
     
-    if not st.session_state.splash_done:
+    if not st.session_state.daily_briefing_done:
         user_name_esc = html.escape(str(st.session_state.get("user_name", "EKIPA"))).upper()
         
         st.markdown("## 🏗️ Poranna odprawa")
@@ -2475,7 +2474,7 @@ if st.session_state['role'] == "crew":
 
         st.markdown("---")
         if st.button("🚀 Przejdź do pełnego planu", use_container_width=True, type="primary"):
-            st.session_state.splash_done = True
+            st.session_state.daily_briefing_done = True
             st.rerun()
         st.stop()
     
