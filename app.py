@@ -1790,6 +1790,7 @@ def confirm_payment_received_by_crew(log_id):
         payment_type = d.get("payment_type")
         note = d.get("note") or req.get("description") or "Brak opisu"
         expense_id = d.get("expense_id")
+        material_id = d.get("material_id")
         
         # D) Walidacja kwoty
         if not amount or amount <= 0:
@@ -1819,12 +1820,16 @@ def confirm_payment_received_by_crew(log_id):
             from datetime import date
             today_str = date.today().strftime("%Y-%m-%d")
             
-            ins_exp = supabase.table("expenses").insert({
+            ins_data = {
                 "description": description,
                 "amount": amount,
                 "quantity": 1,
                 "date": today_str
-            }).execute()
+            }
+            if material_id:
+                ins_data["material_id"] = material_id
+                
+            ins_exp = supabase.table("expenses").insert(ins_data).execute()
             
             if not ins_exp.data:
                 return {"status": "error", "message": "Nie udało się zapisać wydatku w bazie danych. Spróbuj ponownie."}
@@ -1847,10 +1852,10 @@ def confirm_payment_received_by_crew(log_id):
     except Exception as e:
         return {"status": "error", "message": f"Wystąpił nieoczekiwany błąd: {e}"}
 
-def approve_payment_request_by_investor(log_id, investor_note="", transfer_date=None):
+def approve_payment_request_by_investor(log_id, investor_note="", transfer_date=None, material_id=None):
     """Inwestor zatwierdza wniosek finansowy i deklaruje wysłanie przelewu."""
     try:
-        res = supabase.table("project_logs").select("id, status, data, description").eq("id", log_id).execute()
+        res = supabase.table("project_logs").select("id, status, data, description, project_id").eq("id", log_id).execute()
         if not res.data:
             return {"status": "error", "message": "Wniosek nie został znaleziony."}
         
@@ -1868,6 +1873,14 @@ def approve_payment_request_by_investor(log_id, investor_note="", transfer_date=
                 d = json.loads(raw_data)
             except:
                 pass
+        
+        # Opcjonalne powiązanie z materiałem dla REIMBURSEMENT
+        if d.get("payment_type") == "REIMBURSEMENT" and material_id:
+            # Weryfikacja czy materiał należy do tego projektu
+            mat_res = supabase.table("materials").select("id").eq("id", material_id).eq("project_id", req.get("project_id")).execute()
+            if not mat_res.data:
+                return {"status": "error", "message": "Wybrany materiał jest nieprawidłowy lub nie należy do tego projektu."}
+            d["material_id"] = material_id
         
         d["investor_note"] = investor_note
         if transfer_date:
@@ -3929,8 +3942,30 @@ elif menu == "settlements":
                     inv_note = st.text_input("Notatka dla Ekipy (opcjonalnie)", key=f"inv_note_{req['id']}")
                     trans_date = st.date_input("Planowana data przelewu", value=date.today(), key=f"trans_d_{req['id']}")
                     
+                    selected_material_id = None
+                    if req_type == 'REIMBURSEMENT':
+                        st.write("---")
+                        st.caption("Powiąż ten zwrot z materiałem / pozycją budżetową (opcjonalne)")
+                        mats_res = supabase.table("materials").select("id, name").eq("project_id", p_id).execute()
+                        mats = mats_res.data or []
+                        
+                        options = [{"id": None, "name": "Nie przypisuj"}] + mats
+                        
+                        def format_mat_option(opt):
+                            return opt["name"]
+                            
+                        selected_opt = st.selectbox(
+                            "Wybierz materiał",
+                            options=options,
+                            format_func=format_mat_option,
+                            key=f"mat_sel_{req['id']}",
+                            label_visibility="collapsed"
+                        )
+                        selected_material_id = selected_opt["id"]
+                        st.caption("Powiązanie jest opcjonalne. Jeśli paragon dotyczy kilku różnych materiałów, zostaw bez przypisania albo poproś o osobne zgłoszenia.")
+                    
                     if st.button("✅ Zatwierdź i zadeklaruj przelew", key=f"app_req_A_{req['id']}", use_container_width=True, type="primary"):
-                        res = approve_payment_request_by_investor(req['id'], inv_note, trans_date)
+                        res = approve_payment_request_by_investor(req['id'], inv_note, trans_date, material_id=selected_material_id)
                         if res['status'] == 'ok':
                             add_activity_log("Inwestor", "FINANCIAL", p_id, f"Zatwierdzono wniosek {req_type}: {money(req_amount)}")
                             st.success("✅ Zatwierdzono! Ekipa została powiadomiona o przelewie.")
