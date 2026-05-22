@@ -640,7 +640,7 @@ CLOSED_REQUEST_STATUSES = ["DELIVERED", "Dostarczone", "CANCELLED", "Anulowane"]
 def get_crew_requests_grouped():
     """Zwróć zgłoszenia ekipy pogrupowane po statusie."""
     try:
-        response = supabase.table("crew_requests").select("*").order("created_at", desc=True).execute()
+        response = supabase.table("crew_requests").select("*").eq("project_id", p_id_global).order("created_at", desc=True).execute()
         requests = response.data or []
         grouped = {"Nowe": [], "Potwierdzone": [], "Dostarczone": [], "Anulowane": []}
         for req in requests:
@@ -742,7 +742,7 @@ def cancel_crew_request(request_id):
                 
     return {"status": "ok"}
 
-def submit_crew_request_with_blocker(title, needed_by, is_blocker, task_id=None, reported_by="Ekipa"):
+def submit_crew_request_with_blocker(title, needed_by, is_blocker, project_id, task_id=None, reported_by="Ekipa"):
     """Zgłasza potrzebę — jeśli pilne, auto-blokuje zadanie i zapisuje jego status oraz autora."""
     if is_blocker and not task_id:
         raise ValueError("Zadanie (task_id) jest wymagane w przypadku zgłoszenia blokującego.")
@@ -752,7 +752,8 @@ def submit_crew_request_with_blocker(title, needed_by, is_blocker, task_id=None,
         "needed_by": str(needed_by),
         "is_blocker": is_blocker,
         "status": REQUEST_STATUS_NEW,
-        "task_id": task_id
+        "task_id": task_id,
+        "project_id": project_id
     }
     supabase.table("crew_requests").insert(payload).execute()
     
@@ -909,6 +910,7 @@ def render_crew_blockers_materials_panel():
                         title=title.strip(),
                         needed_by=needed_by,
                         is_blocker=is_blocker,
+                        project_id=p_id_global,
                         task_id=task_id_param,
                         reported_by=user_name
                     )
@@ -932,7 +934,7 @@ def render_crew_blockers_materials_panel():
     st.markdown("## 📜 Historia zgłoszonych spraw")
     
     try:
-        reqs_resp = supabase.table("crew_requests").select("*").order("created_at", desc=True).execute()
+        reqs_resp = supabase.table("crew_requests").select("*").eq("project_id", p_id_global).order("created_at", desc=True).execute()
         all_reqs = reqs_resp.data or []
     except Exception as e:
         st.error(f"Błąd podczas pobierania historii zgłoszeń: {e}")
@@ -1127,7 +1129,7 @@ def calculate_budget_forecast():
         if not meta or not meta.get('planned_start_date'): return None
         
         total_budget = meta.get('total_budget', 0)
-        expenses_df = read_table("expenses")
+        expenses_df = read_table("expenses", filters={"project_id": meta['id'], "is_deleted": False})
         spent = expenses_df['amount'].sum() if not expenses_df.empty else 0
         
         start_date = datetime.strptime(meta['planned_start_date'], "%Y-%m-%d").date()
@@ -1176,7 +1178,7 @@ def calculate_health_score():
         # 3. BUDŻET (25%)
         meta = get_project_metadata()
         total_b = meta.get('total_budget', 0) if meta else 0
-        exp_df = read_table("expenses")
+        exp_df = read_table("expenses", filters={"project_id": meta['id'], "is_deleted": False})
         spent = exp_df['amount'].sum() if not exp_df.empty else 0
         
         if total_b > 0:
@@ -1212,7 +1214,7 @@ def get_burn_down_data():
         end_d = datetime.strptime(charter[0]['planned_end_date'], "%Y-%m-%d").date() if charter else start_d + timedelta(days=30)
         
         total_days = (end_d - start_d).days
-        exp_df = read_table("expenses")
+        exp_df = read_table("expenses", filters={"project_id": meta['id'], "is_deleted": False})
         
         planned_line, actual_line, dates = [], [], []
         curr_spent = 0
@@ -1476,7 +1478,7 @@ def calculate_smart_recommendations():
         if score > 0: recs.append({"Typ": "🤔 Decyzja", "Zadanie": row['title'], "Wynik": score, "Powód": " | ".join(reasons)})
 
     # --- 3. EKIPA ---
-    reqs = read_table("crew_requests")
+    reqs = read_table("crew_requests", filters={"project_id": meta['id']})
     for _, row in reqs.iterrows():
         if row['status'] in ('Załatwione', 'Anulowane', 'Przekształcone w zadanie', 'DELIVERED', 'Dostarczone', 'CANCELLED'): continue
         score, reasons = 0, []
@@ -1489,7 +1491,7 @@ def calculate_smart_recommendations():
         if score > 0: recs.append({"Typ": "🛠️ Ekipa", "Zadanie": row['title'], "Wynik": score, "Powód": " | ".join(reasons)})
 
     # --- 4. MATERIAŁY ---
-    mats = read_table("materials")
+    mats = read_table("materials", filters={"project_id": meta['id'], "is_deleted": False})
     for _, row in mats.iterrows():
         if row['status'] in ('Dostarczone', 'Na miejscu', 'Anulowane', 'Zamontowane'): continue
         # Ignore fully delivered
@@ -1829,6 +1831,7 @@ def confirm_payment_received_by_crew(log_id):
             if material_id:
                 ins_data["material_id"] = material_id
                 
+            ins_data["project_id"] = req.get("project_id")
             ins_exp = supabase.table("expenses").insert(ins_data).execute()
             
             if not ins_exp.data:
@@ -3484,7 +3487,7 @@ elif menu == "start":
 
 elif menu == "budget":
     st.title("💰 Wydatki (Supabase Sync)")
-    df_exp = read_table("expenses")
+    df_exp = read_table("expenses", filters={"project_id": p_id_global, "is_deleted": False})
     total = df_exp['amount'].sum() if not df_exp.empty else 0
     st.metric("Całkowite wydatki", f"{total:,.2f} zł")
 
@@ -3496,7 +3499,9 @@ elif menu == "budget":
             if st.form_submit_button("Zapisz Wydatek"):
                 if e_desc.strip() and e_amount > 0:
                     supabase.table("expenses").insert({
-                        "description": e_desc, "amount": e_amount, "date": str(e_date)
+                        "project_id": p_id_global,
+                        "description": e_desc, "amount": e_amount, "date": str(e_date),
+                        "is_deleted": False
                     }).execute()
                     st.rerun()
                 else: st.error("Opis i kwota są wymagane.")
@@ -4205,7 +4210,7 @@ elif menu == "settings":
     st.divider()
     st.subheader("📊 Eksport Danych Księgowych")
     st.caption("Pobierz całą historię finansową do pliku CSV (Otworzysz go w Excelu).")
-    df_exp_full = read_table("expenses")
+    df_exp_full = read_table("expenses", filters={"project_id": p_id, "is_deleted": False})
     if not df_exp_full.empty:
         csv = df_exp_full.to_csv(index=False).encode('utf-8')
         st.download_button("Pobierz historię wydatków (CSV)", data=csv, file_name="remontiq_wydatki.csv", mime="text/csv")
