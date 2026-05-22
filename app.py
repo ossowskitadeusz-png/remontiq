@@ -1877,9 +1877,12 @@ def approve_payment_request_by_investor(log_id, investor_note="", transfer_date=
         # Opcjonalne powiązanie z materiałem dla REIMBURSEMENT
         if d.get("payment_type") == "REIMBURSEMENT" and material_id:
             # Weryfikacja czy materiał należy do tego projektu
-            mat_res = supabase.table("materials").select("id").eq("id", material_id).eq("project_id", req.get("project_id")).execute()
-            if not mat_res.data:
-                return {"status": "error", "message": "Wybrany materiał jest nieprawidłowy lub nie należy do tego projektu."}
+            try:
+                mat_res = supabase.table("materials").select("id").eq("id", material_id).eq("project_id", req.get("project_id")).execute()
+                if not mat_res.data:
+                    return {"status": "error", "message": "Wybrany materiał jest nieprawidłowy lub nie należy do tego projektu."}
+            except Exception as e:
+                return {"status": "error", "message": "Błąd bazy danych (Tabela materiałów)."}
             d["material_id"] = material_id
         
         d["investor_note"] = investor_note
@@ -3946,8 +3949,12 @@ elif menu == "settlements":
                     if req_type == 'REIMBURSEMENT':
                         st.write("---")
                         st.caption("Powiąż ten zwrot z materiałem / pozycją budżetową (opcjonalne)")
-                        mats_res = supabase.table("materials").select("id, name").eq("project_id", p_id).execute()
-                        mats = mats_res.data or []
+                        mats = []
+                        try:
+                            mats_res = supabase.table("materials").select("id, name").eq("project_id", p_id).execute()
+                            mats = mats_res.data or []
+                        except Exception as e:
+                            pass # Tabela 'materials' może jeszcze nie istnieć w bazie
                         
                         options = [{"id": None, "name": "Nie przypisuj"}] + mats
                         
