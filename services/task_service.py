@@ -6,17 +6,28 @@ class TaskService:
     def __init__(self, supabase_client):
         self.supabase = supabase_client
 
-    def create_task(self, project_id: str, phase_id: str, name: str, description: str = "", estimated_duration_days: int = None) -> Dict:
+    def _build_handshake_stamp(self, commercial_status: str, price: float, comment: str = "") -> str:
+        execution_status = "TODO" if commercial_status == "ACCEPTED_LOCKED" else "NOT_READY"
+        return (
+            f"--- DANE NEGOCJACYJNE ---\n"
+            f"COMMERCIAL: {commercial_status}\n"
+            f"EXECUTION: {execution_status}\n"
+            f"LOCKED_PRICE: {price}\n"
+            f"LAST_COMMENT: {comment}\n"
+            f"------------------------\n\n"
+        )
+
+    def create_task(self, project_id: str, phase_id: str, name: str, description: str = "", estimated_duration_days: int = None, fast_track_enabled: bool = False, fast_track_price: float = None) -> Dict:
         """Tworzy nowe zadanie w wybranym pokoju/fazie."""
         # Domyślny stempel Handshake dla nowego zadania
-        initial_handshake = (
-            "--- DANE NEGOCJACYJNE ---\n"
-            "COMMERCIAL: TO_BE_VALUED\n"
-            "EXECUTION: NOT_READY\n"
-            "LOCKED_PRICE: 0.0\n"
-            "LAST_COMMENT: Nowe zadanie do wyceny\n"
-            "------------------------\n\n"
-        )
+        if fast_track_enabled and fast_track_price and fast_track_price > 0:
+            initial_handshake = self._build_handshake_stamp("ACCEPTED_LOCKED", float(fast_track_price), "Cena została już uzgodniona")
+            db_commercial_status = "approved"
+            db_final_price = float(fast_track_price)
+        else:
+            initial_handshake = self._build_handshake_stamp("TO_BE_VALUED", 0.0, "Nowe zadanie do wyceny")
+            db_commercial_status = "not_started"
+            db_final_price = None
         
         # Oblicz sort_order = max + 1 dla nowo dodawanego zadania w danej fazie
         sort_order = 0
@@ -38,7 +49,9 @@ class TaskService:
             "state": "DRAFT",
             "sort_order": sort_order,
             "estimated_duration_days": estimated_duration_days if estimated_duration_days is not None else 1,
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
+            "commercial_status": db_commercial_status,
+            "final_approved_price": db_final_price
         }
 
         res = self.supabase.table("tasks").insert(data).execute()
@@ -81,16 +94,7 @@ class TaskService:
         if "--- DANE NEGOCJACYJNE ---" in desc:
             desc = desc.split("------------------------")[-1].strip()
             
-        execution_status = "TODO" if commercial_status == "ACCEPTED_LOCKED" else "NOT_READY"
-        
-        meta_tag = (
-            f"--- DANE NEGOCJACYJNE ---\n"
-            f"COMMERCIAL: {commercial_status}\n"
-            f"EXECUTION: {execution_status}\n"
-            f"LOCKED_PRICE: {price}\n"
-            f"LAST_COMMENT: {comment}\n"
-            f"------------------------\n\n"
-        )
+        meta_tag = self._build_handshake_stamp(commercial_status, price, comment)
         
         update_payload = {
             "description": meta_tag + desc,
