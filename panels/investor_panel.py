@@ -50,10 +50,16 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
         ordering_service = OrderingService(supabase, task_service)
     
     # 1. WYBÓR PROJEKTU
-    projects = supabase.table("project_metadata").select("id, project_name").execute().data
+    user_id = st.session_state.get("user_id")
+    if not user_id:
+        st.error("Błąd autoryzacji: Nie znaleziono ID użytkownika. Zaloguj się ponownie.")
+        st.stop()
+        
+    projects = supabase.table("project_metadata").select("id, project_name").eq("user_id", user_id).execute().data
     if not projects:
         st.warning("Brak projektów w systemie")
-        return
+        # Zamiast return, pozwól na dodanie nowego projektu
+        projects = []
     
     project_options = {p["project_name"]: p["id"] for p in projects}
     options_list = list(project_options.keys()) + ["➕ Dodaj nowy projekt"]
@@ -89,7 +95,14 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                         "status": "PLANNING"
                     }).execute()
                     if res.data:
-                        st.session_state["current_project_id"] = res.data[0]["id"]
+                        project_id = res.data[0]["id"]
+                        st.session_state["current_project_id"] = project_id
+                        
+                        # Generowanie kodu ekipy (Gatekeeper)
+                        from app import create_crew_access_code
+                        crew_code = create_crew_access_code(project_id)
+                        st.session_state["last_generated_crew_code"] = crew_code
+                        
                         st.success("Projekt utworzony! Ładowanie...")
                         st.rerun()
                 else:
@@ -104,6 +117,26 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     
     st.markdown("---")
     
+    # 1.5 DOSTĘP EKIPY
+    with st.expander("🔐 Dostęp ekipy", expanded=bool(st.session_state.get("last_generated_crew_code"))):
+        if st.session_state.get("last_generated_crew_code"):
+            st.success(f"Oto nowy kod dostępu dla ekipy: **{st.session_state['last_generated_crew_code']}**")
+            st.warning("Zapisz go i przekaż Szefowi Ekipy. Z powodów bezpieczeństwa kod ten wyświetla się w pełni jawnie tylko raz!")
+            if st.button("Ukryj kod (Zapisałem)"):
+                del st.session_state["last_generated_crew_code"]
+                st.rerun()
+        else:
+            res = supabase.table("project_access_codes").select("id").eq("project_id", selected_project_id).eq("role", "crew").eq("active", True).execute()
+            if res.data and len(res.data) > 0:
+                st.info("Aktywny kod dla ekipy istnieje.")
+            else:
+                st.warning("Brak aktywnego kodu dla ekipy.")
+                
+            if st.button("Wygeneruj nowy kod dla ekipy"):
+                from app import create_crew_access_code
+                new_code = create_crew_access_code(selected_project_id)
+                st.session_state["last_generated_crew_code"] = new_code
+                st.rerun()
     # 2. DASHBOARD - METRYKI
     project_data = supabase.table("project_metadata").select("*").eq("id", selected_project_id).single().execute().data
     crew_name = project_data.get("crew_lead_name") or "Ekipa"

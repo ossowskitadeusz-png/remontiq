@@ -7,7 +7,54 @@ import time
 from typing import List, Dict
 from supabase import create_client, Client
 import plotly.graph_objects as go
+import random
+import string
+import os
+
 APP_VERSION = "sprint27-v1.0-Crew-UX"
+
+# ==========================================
+# G. KODY DOSTĘPU (GATEKEEPER)
+# ==========================================
+
+def generate_access_code(length=8):
+    """Generuje losowy kod dostępu w formacie EKIPA-XXXX-XXXX."""
+    chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+    return f"EKIPA-{chars[:4]}-{chars[4:]}"
+
+def normalize_access_code(code: str) -> str:
+    """Normalizuje kod dostępu (usuwa spacje, wielkie litery)."""
+    if not code: return ""
+    return str(code).strip().upper()
+
+def hash_access_code(code: str) -> str:
+    """Haszuje kod dostępu (SHA256 z opcjonalnym pepperem)."""
+    normalized = normalize_access_code(code)
+    pepper = os.environ.get("ACCESS_CODE_PEPPER", "")
+    content = f"{pepper}:{normalized}" if pepper else normalized
+    return hashlib.sha256(content.encode()).hexdigest()
+
+def create_crew_access_code(project_id: str, label: str = "Domyślna Ekipa") -> str:
+    """Tworzy nowy kod dostępu dla ekipy i zapisuje hash w bazie."""
+    from services.supabase_client import get_supabase_client
+    supabase = get_supabase_client()
+    
+    code = generate_access_code()
+    code_hash = hash_access_code(code)
+    
+    # Dezaktywacja starych kodów
+    supabase.table("project_access_codes").update({"active": False}).eq("project_id", project_id).eq("role", "crew").execute()
+    
+    # Zapis nowego kodu
+    supabase.table("project_access_codes").insert({
+        "project_id": project_id,
+        "role": "crew",
+        "label": label,
+        "code_hash": code_hash,
+        "active": True
+    }).execute()
+    
+    return code
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
@@ -304,7 +351,11 @@ def get_project_metadata():
         if st.session_state.get("current_project_id"):
             query = query.eq("id", st.session_state["current_project_id"])
         else:
-            query = query.order("created_at", desc=True).limit(1)
+            if st.session_state.get("role") == "investor":
+                user_id = st.session_state.get("user_id", "00000000-0000-0000-0000-000000000001")
+                query = query.eq("user_id", user_id).order("created_at", desc=True).limit(1)
+            else:
+                return None
             
         res = query.execute()
         
@@ -360,6 +411,11 @@ def create_project_metadata(**kwargs):
         if result.data and len(result.data) > 0:
             project_id = result.data[0]['id']
             logger.info(f"✅ Project created successfully: {project_id}")
+            
+            # Generowanie kodu ekipy (Gatekeeper)
+            crew_code = create_crew_access_code(project_id)
+            st.session_state["last_generated_crew_code"] = crew_code
+            
             return result
         else:
             st.error("❌ Projekt nie został utworzony (brak danych w odpowiedzi).")
@@ -607,7 +663,10 @@ def request_rework(inspection_id, rework_description):
 
 def get_crew_kpis():
     try:
-        response = supabase.table("tasks").select("*").execute()
+        project_meta = get_project_metadata()
+        if not project_meta: return {"total": 0, "in_progress": 0, "blocked": 0, "completed": 0, "awaiting": 0, "days_to_end": 0}
+        
+        response = supabase.table("tasks").select("*").eq("project_id", project_meta['id']).execute()
         tasks = response.data or []
         total = len(tasks)
         in_progress = len([t for t in tasks if t.get('kanban_status') == 'IN_PROGRESS' and not t.get('is_blocked')])
@@ -1108,7 +1167,14 @@ def move_task_down(task_id):
 def get_filtered_comments(task_name=None, author_role=None, order="newest_first"):
     """Pobiera komentarze z filtracją i kontekstem zadania."""
     try:
-        comments = supabase.table("task_comments").select("*").execute().data or []
+        project_meta = get_project_metadata()
+        if not project_meta: return []
+        
+        p_tasks = supabase.table("tasks").select("id").eq("project_id", project_meta['id']).execute().data or []
+        task_ids = [t['id'] for t in p_tasks]
+        if not task_ids: return []
+        
+        comments = supabase.table("task_comments").select("*").in_("task_id", task_ids).execute().data or []
         for c in comments:
             t_r = supabase.table("tasks").select("name, room_id").eq("id", c['task_id']).execute()
             if t_r.data:
@@ -1169,7 +1235,10 @@ def calculate_health_score():
     """Oblicza Health Score projektu (średnia ważona 35/25/25/15)."""
     try:
         # 1. POSTĘP (35%)
-        tasks = supabase.table("tasks").select("*").execute().data or []
+        meta = get_project_metadata()
+        if not meta: return {"score": 0, "status": "⚪ BRAK DANYCH", "metrics": {}, "details": {}}
+        
+        tasks = supabase.table("tasks").select("*").eq("project_id", meta['id']).execute().data or []
         if not tasks: return {"score": 0, "status": "⚪ BRAK DANYCH", "metrics": {}, "details": {}}
         
         completed_tasks = [t for t in tasks if is_task_completed_for_progress(t)]
@@ -2252,38 +2321,67 @@ if "role" not in st.session_state:
 
 def logout():
     st.session_state["role"] = None
+    st.session_state["current_project_id"] = None
+    st.session_state["crew_project_access_verified"] = False
+    st.session_state["crew_access_code_id"] = None
     st.rerun()
 
 # --- EKRAN LOGOWANIA ---
 if st.session_state["role"] is None:
     st.markdown("<h1 style='text-align:center;margin-top:80px'>RemontIQ</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center;color:#a0aec0'>Podaj PIN dostępu do aplikacji.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:#a0aec0'>Wybierz swoją rolę, aby kontynuować.</p>", unsafe_allow_html=True)
 
     auth_config = st.secrets.get("auth", {})
     inv_pin = auth_config.get("investor_pin")
-    crw_pin = auth_config.get("crew_pin")
     
-    if not inv_pin or not crw_pin:
+    if not inv_pin:
         st.error("Błąd konfiguracji logowania. Skontaktuj się z administratorem.")
         st.stop()
 
-    col1, col2, col3 = st.columns([1, 1, 1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        with st.form("login_form"):
-            pin = st.text_input("PIN", type="password", placeholder="Wpisz 4-cyfrowy PIN")
-            if st.form_submit_button("Zaloguj", width="stretch", type="primary"):
-                if pin == str(inv_pin):
-                    st.session_state["role"] = "investor"
-                    st.session_state["last_visit"] = st.session_state.get("current_visit", None)
-                    st.session_state["current_visit"] = datetime.now().isoformat()
-                    st.rerun()
-                elif pin == str(crw_pin):
-                    st.session_state["role"] = "crew"
-                    st.session_state["last_visit"] = st.session_state.get("current_visit", None)
-                    st.session_state["current_visit"] = datetime.now().isoformat()
-                    st.rerun()
-                else:
-                    st.error("Nieprawidłowy PIN!")
+        tab_inv, tab_crew = st.tabs(["👤 Jestem Inwestorem", "👷 Jestem Ekipą"])
+        
+        with tab_inv:
+            with st.form("login_form_inv"):
+                pin = st.text_input("Główny PIN Inwestora", type="password", placeholder="Wpisz PIN inwestora")
+                if st.form_submit_button("Zaloguj jako Inwestor", width="stretch", type="primary"):
+                    if pin == str(inv_pin):
+                        st.session_state["role"] = "investor"
+                        st.session_state["last_visit"] = st.session_state.get("current_visit", None)
+                        st.session_state["current_visit"] = datetime.now().isoformat()
+                        st.rerun()
+                    else:
+                        st.error("Nieprawidłowy PIN!")
+                        
+        with tab_crew:
+            with st.form("login_form_crew"):
+                st.info("Wpisz kod dostępu do remontu otrzymany od inwestora (np. EKIPA-XXXX-XXXX).")
+                crew_code = st.text_input("Kod dostępu", placeholder="EKIPA-...")
+                if st.form_submit_button("Wejdź do remontu", width="stretch", type="primary"):
+                    from services.supabase_client import get_supabase_client
+                    supabase_client = get_supabase_client()
+                    
+                    code_hash = hash_access_code(crew_code)
+                    # Szukaj kodu w bazie
+                    res = supabase_client.table("project_access_codes").select("*").eq("code_hash", code_hash).eq("active", True).eq("role", "crew").execute()
+                    
+                    if res.data and len(res.data) > 0:
+                        record = res.data[0]
+                        # Aktualizacja used_at
+                        supabase_client.table("project_access_codes").update({"used_at": datetime.now().isoformat()}).eq("id", record["id"]).execute()
+                        
+                        st.session_state["role"] = "crew"
+                        st.session_state["current_project_id"] = record["project_id"]
+                        st.session_state["crew_project_access_verified"] = True
+                        st.session_state["crew_access_code_id"] = record["id"]
+                        
+                        st.session_state["last_visit"] = st.session_state.get("current_visit", None)
+                        st.session_state["current_visit"] = datetime.now().isoformat()
+                        st.rerun()
+                    else:
+                        st.error("Nieprawidłowy lub nieaktywny kod remontu.")
+
     st.stop()
 
 def render_activity_banner(role):
@@ -2335,8 +2433,17 @@ role_name = "Inwestor" if st.session_state['role'] == "investor" else f"Ekipa ({
 # 2. Renderowanie Górnego Bara (Wspólne)
 render_top_bar(proj_name, role_name, st.session_state.get('user_name', 'Użytkownik'))
 
+def render_crew_login_gate():
+    st.error("Brak uprawnień. Proszę zalogować się za pomocą poprawnego kodu dostępu do remontu.")
+    if st.button("Powrót do ekranu logowania"):
+        logout()
+
 # 3. Definicja Menu w Sidebarze (Zależna od Roli)
 if st.session_state['role'] == "crew":
+    if not st.session_state.get("crew_project_access_verified") or not st.session_state.get("current_project_id"):
+        render_crew_login_gate()
+        st.stop()
+        
     st.sidebar.markdown("### 🛠️ ZARZĄDZANIE")
     
     menu = st.sidebar.radio("👷 NAWIGACJA", [
@@ -3254,7 +3361,7 @@ elif menu == "dashboard_view":
     # ==============================
     # DANE
     # ==============================
-    all_tasks_data = supabase.table("tasks").select("*").execute().data or []
+    all_tasks_data = supabase.table("tasks").select("*").eq("project_id", p_id_global).execute().data or [] if p_id_global else []
     pending_insp = get_pending_inspections()
     crew_grouped = get_crew_requests_grouped()
     new_requests = crew_grouped.get("Nowe", [])
@@ -4094,7 +4201,7 @@ elif menu == "negotiations":
     total_budget = p_meta.get('total_budget', 0) if p_meta else 0
 
     try:
-        all_tasks = supabase.table("tasks").select("*").execute().data or []
+        all_tasks = supabase.table("tasks").select("*").eq("project_id", p_meta['id']).execute().data or [] if p_meta else []
         tasks = [t for t in all_tasks if "--- DANE NEGOCJACYJNE ---" in (t.get('description') or '')]
         # Wykluczamy zablokowane
         tasks = [t for t in tasks if "COMMERCIAL: ACCEPTED_LOCKED" not in (t.get('description') or '')]
