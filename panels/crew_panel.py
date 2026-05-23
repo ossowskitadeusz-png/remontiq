@@ -86,7 +86,8 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     if pending_crew:
         st.error(f"🚨 **UWAGA! Masz {len(pending_crew)} nową(e) kontrofertę(y) od Inwestora!** Zajrzyj do zakładki 'Kontrpropozycje', aby podjąć decyzję.", icon="🚨")
         
-    with st.expander("⚡ Szybkie akcje", expanded=False):
+    st.markdown("### ⚡ Szybkie akcje")
+    with st.container():
         with st.form("quick_action_msg_form", clear_on_submit=True):
             quick_msg = st.text_area("💬 Napisz do inwestora", placeholder="Wpisz treść wiadomości...", height=80)
             if st.form_submit_button("Wyślij wiadomość", type="primary"):
