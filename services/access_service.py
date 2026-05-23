@@ -3,10 +3,10 @@ import random
 import string
 import hashlib
 
-def generate_access_code(length=8):
-    """Generuje losowy kod dostępu w formacie EKIPA-XXXX-XXXX."""
-    chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-    return f"EKIPA-{chars[:4]}-{chars[4:]}"
+def generate_access_code(length=6):
+    """Generuje losowy kod dostępu w przyjaznym formacie np. EKIPA-123456 (tylko cyfry)."""
+    chars = ''.join(random.choices(string.digits, k=length))
+    return f"EKIPA-{chars}"
 
 def normalize_access_code(code: str) -> str:
     """Normalizuje kod dostępu (usuwa spacje, wielkie litery)."""
