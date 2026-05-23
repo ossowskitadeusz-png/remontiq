@@ -99,8 +99,8 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                         st.session_state["current_project_id"] = project_id
                         
                         # Generowanie kodu ekipy (Gatekeeper)
-                        from app import create_crew_access_code
-                        crew_code = create_crew_access_code(project_id)
+                        from services.access_service import create_crew_access_code
+                        crew_code = create_crew_access_code(project_id, supabase)
                         st.session_state["last_generated_crew_code"] = crew_code
                         
                         st.success("Projekt utworzony! Ładowanie...")
@@ -127,15 +127,15 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                 del st.session_state["last_generated_crew_code"]
                 st.rerun()
         else:
-            res = supabase.table("project_access_codes").select("id").eq("project_id", selected_project_id).eq("role", "crew").eq("active", True).execute()
-            if res.data and len(res.data) > 0:
+            from services.access_service import active_crew_code_exists
+            if active_crew_code_exists(selected_project_id, supabase):
                 st.info("✅ Aktywny kod dla ekipy istnieje (został wcześniej wygenerowany).")
             else:
                 st.warning("Brak aktywnego kodu dla ekipy.")
                 
             if st.button("Wygeneruj nowy kod dla ekipy (nadpisze stary)"):
-                from app import create_crew_access_code
-                new_code = create_crew_access_code(selected_project_id)
+                from services.access_service import create_crew_access_code
+                new_code = create_crew_access_code(selected_project_id, supabase)
                 st.session_state["last_generated_crew_code"] = new_code
                 st.rerun()
                 

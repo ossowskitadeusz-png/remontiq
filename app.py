@@ -14,51 +14,10 @@ import os
 APP_VERSION = "sprint27-v1.0-Crew-UX"
 
 # ==========================================
-# G. KODY DOSTĘPU (GATEKEEPER)
-# ==========================================
-
-def generate_access_code(length=8):
-    """Generuje losowy kod dostępu w formacie EKIPA-XXXX-XXXX."""
-    chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
-    return f"EKIPA-{chars[:4]}-{chars[4:]}"
-
-def normalize_access_code(code: str) -> str:
-    """Normalizuje kod dostępu (usuwa spacje, wielkie litery)."""
-    if not code: return ""
-    return str(code).strip().upper()
-
-def hash_access_code(code: str) -> str:
-    """Haszuje kod dostępu (SHA256 z opcjonalnym pepperem)."""
-    normalized = normalize_access_code(code)
-    pepper = os.environ.get("ACCESS_CODE_PEPPER", "")
-    content = f"{pepper}:{normalized}" if pepper else normalized
-    return hashlib.sha256(content.encode()).hexdigest()
-
-def create_crew_access_code(project_id: str, label: str = "Domyślna Ekipa") -> str:
-    """Tworzy nowy kod dostępu dla ekipy i zapisuje hash w bazie."""
-    from services.supabase_client import get_supabase_client
-    supabase = get_supabase_client()
-    
-    code = generate_access_code()
-    code_hash = hash_access_code(code)
-    
-    # Dezaktywacja starych kodów
-    supabase.table("project_access_codes").update({"active": False}).eq("project_id", project_id).eq("role", "crew").execute()
-    
-    # Zapis nowego kodu
-    supabase.table("project_access_codes").insert({
-        "project_id": project_id,
-        "role": "crew",
-        "label": label,
-        "code_hash": code_hash,
-        "active": True
-    }).execute()
-    
-    return code
-
-# ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
 # ==========================================
+
+from services.access_service import validate_crew_access_code, create_crew_access_code
 
 def apply_saas_theme():
     """Wstrzykuje zaawansowany CSS dla profesjonalnego SaaS Layout."""
@@ -411,9 +370,9 @@ def create_project_metadata(**kwargs):
         if result.data and len(result.data) > 0:
             project_id = result.data[0]['id']
             logger.info(f"✅ Project created successfully: {project_id}")
-            
             # Generowanie kodu ekipy (Gatekeeper)
-            crew_code = create_crew_access_code(project_id)
+            from services.access_service import create_crew_access_code
+            crew_code = create_crew_access_code(project_id, supabase)
             st.session_state["last_generated_crew_code"] = crew_code
             
             return result
@@ -2344,7 +2303,7 @@ if st.session_state["role"] is None:
         
         with tab_inv:
             with st.form("login_form_inv"):
-                pin = st.text_input("Główny PIN Inwestora", type="password", placeholder="Wpisz PIN inwestora")
+                pin = st.text_input("Główny PIN Inwestora", type="password", placeholder="Wpisz PIN inwestora", key="investor_pin_input")
                 if st.form_submit_button("Zaloguj jako Inwestor", width="stretch", type="primary"):
                     if pin == str(inv_pin):
                         st.session_state["role"] = "investor"
@@ -2358,17 +2317,15 @@ if st.session_state["role"] is None:
         with tab_crew:
             with st.form("login_form_crew"):
                 st.info("Wpisz kod dostępu do remontu otrzymany od inwestora (np. EKIPA-XXXX-XXXX).")
-                crew_code = st.text_input("Kod dostępu", placeholder="EKIPA-...")
+                crew_code = st.text_input("Kod dostępu", placeholder="EKIPA-...", key="crew_code_input")
                 if st.form_submit_button("Wejdź do remontu", width="stretch", type="primary"):
                     from services.supabase_client import get_supabase_client
+                    from services.access_service import validate_crew_access_code
                     supabase_client = get_supabase_client()
                     
-                    code_hash = hash_access_code(crew_code)
-                    # Szukaj kodu w bazie
-                    res = supabase_client.table("project_access_codes").select("*").eq("code_hash", code_hash).eq("active", True).eq("role", "crew").execute()
+                    record = validate_crew_access_code(crew_code, supabase_client)
                     
-                    if res.data and len(res.data) > 0:
-                        record = res.data[0]
+                    if record:
                         # Aktualizacja used_at
                         supabase_client.table("project_access_codes").update({"used_at": datetime.now().isoformat()}).eq("id", record["id"]).execute()
                         
@@ -2436,13 +2393,32 @@ render_top_bar(proj_name, role_name, st.session_state.get('user_name', 'Użytkow
 
 def render_crew_login_gate():
     st.error("Brak uprawnień. Proszę zalogować się za pomocą poprawnego kodu dostępu do remontu.")
-    if st.button("Powrót do ekranu logowania"):
-        logout()
+    with st.form("guard_crew_login_form"):
+        crew_code = st.text_input("Kod dostępu", placeholder="EKIPA-...", key="guard_crew_code_input")
+        if st.form_submit_button("Wejdź do remontu", width="stretch", type="primary"):
+            from services.supabase_client import get_supabase_client
+            from services.access_service import validate_crew_access_code
+            supabase_client = get_supabase_client()
+            
+            record = validate_crew_access_code(crew_code, supabase_client)
+            if record:
+                supabase_client.table("project_access_codes").update({"used_at": datetime.now().isoformat()}).eq("id", record["id"]).execute()
+                st.session_state["role"] = "crew"
+                st.session_state["current_project_id"] = record["project_id"]
+                st.session_state["crew_project_access_verified"] = True
+                st.session_state["crew_access_code_id"] = record["id"]
+                st.session_state["last_visit"] = st.session_state.get("current_visit", None)
+                st.session_state["current_visit"] = datetime.now().isoformat()
+                st.rerun()
+            else:
+                st.error("Nieprawidłowy lub nieaktywny kod remontu.")
 
 # 3. Definicja Menu w Sidebarze (Zależna od Roli)
 if st.session_state['role'] == "crew":
     if not st.session_state.get("crew_project_access_verified") or not st.session_state.get("current_project_id"):
         render_crew_login_gate()
+        if st.sidebar.button("🚪 Wróć do logowania główniego"):
+            logout()
         st.stop()
         
     st.sidebar.markdown("### 🛠️ ZARZĄDZANIE")
