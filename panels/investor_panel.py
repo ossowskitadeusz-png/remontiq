@@ -334,9 +334,9 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                             
                         with st.expander("➕ Dodaj zadanie do tego pomieszczenia"):
                             with st.form(f"add_task_form_{phase_id}", clear_on_submit=True):
-                                new_task_name = st.text_input("Nazwa zadania / roboty *")
-                                fast_track_enabled = st.checkbox("Cena już ustalona z ekipą — pomiń wycenę")
-                                fast_track_price = st.number_input("Zaakceptowana cena (PLN)", min_value=0.0, step=10.0)
+                                new_task_name = st.text_input("Nazwa zadania / roboty *", key=f"ntn_{phase_id}")
+                                fast_track_enabled = st.checkbox("Cena już ustalona z ekipą — pomiń wycenę", key=f"fte_{phase_id}")
+                                fast_track_price = st.number_input("Zaakceptowana cena (PLN)", min_value=0.0, step=10.0, key=f"ftp_{phase_id}")
                                 if st.form_submit_button("Dodaj zadanie", type="primary"):
                                     if not new_task_name.strip():
                                         st.error("Podaj nazwę zadania!")
