@@ -135,33 +135,6 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
             st.rerun()
                 
     st.markdown("---")
-    
-    # 1.6 ACTION CENTER (Centrum Akcji)
-    st.markdown("### ⚡ Centrum Akcji (Wymaga Twojej uwagi)")
-    pending_negs = negotiation_service.get_pending_for_investor(selected_project_id)
-    tasks_to_inspect = supabase.table("tasks").select("id, name, phase_id").eq("project_id", selected_project_id).eq("kanban_status", "AWAITING_INSPECTION").execute().data or []
-    blocked_tasks = supabase.table("tasks").select("id, name").eq("project_id", selected_project_id).eq("kanban_status", "BLOCKED").execute().data or [] # Zależnie od implementacji blokad
-    
-    action_cols = st.columns(3)
-    with action_cols[0]:
-        if pending_negs:
-            st.error(f"💰 {len(pending_negs)} wycen od ekipy")
-        else:
-            st.success("💰 Brak wycen do akceptacji")
-            
-    with action_cols[1]:
-        if tasks_to_inspect:
-            st.warning(f"🔍 {len(tasks_to_inspect)} zadań do odbioru")
-        else:
-            st.success("🔍 Brak zadań do odbioru")
-            
-    with action_cols[2]:
-        if blocked_tasks:
-            st.error(f"🚨 {len(blocked_tasks)} zadań zablokowanych!")
-        else:
-            st.success("🚨 Brak blokad na budowie")
-
-    st.markdown("---")
     # 2. DASHBOARD - METRYKI
     project_data = supabase.table("project_metadata").select("*").eq("id", selected_project_id).single().execute().data
     crew_name = project_data.get("crew_lead_name") or "Ekipa"
@@ -181,12 +154,13 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
         st.metric("📊 Pozostało", f"{(total_budget - spent):,.0f} zł")
     
     with col4:
-        st.metric("⏳ Czekające wyceny", f"{len(pending_negs)}")
+        pending_negs = negotiation_service.get_pending_for_investor(selected_project_id)
+        st.metric("⏳ Czekające", f"{len(pending_negs)}")
     
     with col5:
         all_negs = negotiation_service.get_all_negotiations_for_project(selected_project_id)
         approved = len([n for n in all_negs if n['status'] == 'accepted'])
-        st.metric("✅ Zatwierdzone wyceny", f"{approved}")
+        st.metric("✅ Zatwierdzone", f"{approved}")
     
     st.markdown("---")
     
