@@ -37,19 +37,21 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
         from services.ordering_service import OrderingService
         ordering_service = OrderingService(supabase, task_service)
     
-    # 1. WYBÓR PROJEKTU
-    projects_res = supabase.table("project_metadata").select("id, project_name, crew_lead_name").execute()
+    # 1. AUTORYZOWANY PROJEKT
+    selected_project_id = st.session_state.get("crew_authorized_project_id")
+    if not selected_project_id:
+        st.error("Brak przypisanego remontu. Zaloguj się poprawnym kodem.")
+        return
+        
+    projects_res = supabase.table("project_metadata").select("id, project_name, crew_lead_name").eq("id", selected_project_id).execute()
     projects = projects_res.data or []
     if not projects:
-        st.warning("Brak projektów w systemie")
+        st.warning("Projekt, do którego próbujesz się dostać, nie istnieje.")
         return
     
-    project_options = {p["project_name"]: p for p in projects}
-    selected_project_name = st.selectbox("🏗️ Wybierz projekt", options=project_options.keys(), key="crew_project_select")
-    selected_project_data = project_options[selected_project_name]
-    selected_project_id = selected_project_data["id"]
+    selected_project_data = projects[0]
     crew_boss_name = selected_project_data.get("crew_lead_name") or "Ekipy"
-
+    selected_project_name = selected_project_data["project_name"]
     col_title, col_refresh = st.columns([5, 1])
     with col_title:
         st.header(f"👷 Panel Ekipy ({crew_boss_name})")

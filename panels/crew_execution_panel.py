@@ -15,18 +15,21 @@ def render_crew_execution_panel(supabase, task_service):
 
     st.markdown("---")
     
-    # 1. Wybór projektu
-    projects_res = supabase.table("project_metadata").select("id, project_name, crew_lead_name").execute()
-    projects = projects_res.data or []
-    if not projects:
-        st.warning("Brak projektów w systemie. Poczekaj, aż Inwestor założy projekt.")
+    # 1. Autoryzowany projekt
+    selected_project_id = st.session_state.get("crew_authorized_project_id")
+    if not selected_project_id:
+        st.error("Brak przypisanego remontu. Zaloguj się poprawnym kodem.")
         return
         
-    project_options = {p["project_name"]: p for p in projects}
-    selected_project_name = st.selectbox("🏗️ Wybierz projekt do realizacji", options=project_options.keys(), key="exec_proj_select")
-    selected_project_data = project_options[selected_project_name]
-    selected_project_id = selected_project_data["id"]
+    projects_res = supabase.table("project_metadata").select("id, project_name, crew_lead_name").eq("id", selected_project_id).execute()
+    projects = projects_res.data or []
+    if not projects:
+        st.warning("Projekt do którego masz dostęp przestał istnieć.")
+        return
+        
+    selected_project_data = projects[0]
     crew_name = selected_project_data.get("crew_lead_name") or "Ekipa"
+    st.info(f"Realizujesz projekt: **{selected_project_data['project_name']}**")
     
     st.markdown("---")
     
