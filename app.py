@@ -168,6 +168,7 @@ st.session_state.timeline_service = timeline_service
 st.session_state.change_service = change_service
 
 # Importy nowych paneli (Sprint 24)
+from panels.crew_panel import render_crew_panel
 from panels.investor_panel import render_investor_panel
 import importlib
 import components.chat_component
