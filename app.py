@@ -88,6 +88,8 @@ def apply_saas_theme():
 
 def render_top_bar(project_name, user_role, user_name):
     """Renderuje pływający pasek górny."""
+    if not user_name:
+        user_name = "Użytkownik"
     role_emoji = "👤" if user_role == "Inwestor" else "👷"
     st.markdown(f"""
     <div class="main-header">
