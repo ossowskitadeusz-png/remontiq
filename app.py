@@ -3092,7 +3092,9 @@ elif menu == "start":
             else:
                 pokoje = [p.strip() for p in pokoje_input.split(",") if p.strip()]
                 for p in pokoje:
-                    try: supabase.table("rooms").insert({"name": p, "project_id": p_id}).execute()
+                    try: 
+                        supabase.table("rooms").insert({"name": p, "project_id": p_id}).execute()
+                        phase_service.create_phase(project_id=p_id, phase_name=p)
                     except Exception: pass
                 st.success(f"Przetworzono {len(pokoje)} pomieszczeń.")
                 st.rerun()

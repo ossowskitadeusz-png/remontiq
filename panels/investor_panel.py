@@ -372,6 +372,7 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                 if new_room_name:
                     try:
                         supabase.table("rooms").insert({"name": new_room_name, "project_id": selected_project_id}).execute()
+                        phase_service.create_phase(project_id=selected_project_id, phase_name=new_room_name)
                         st.success(f"Dodano: {new_room_name}")
                         st.rerun()
                     except Exception as e:
