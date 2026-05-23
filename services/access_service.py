@@ -14,11 +14,8 @@ def normalize_access_code(code: str) -> str:
     return str(code).strip().upper()
 
 def hash_access_code(code: str) -> str:
-    """Haszuje kod dostępu (SHA256 z opcjonalnym pepperem)."""
-    normalized = normalize_access_code(code)
-    pepper = os.environ.get("ACCESS_CODE_PEPPER", "")
-    content = f"{pepper}:{normalized}" if pepper else normalized
-    return hashlib.sha256(content.encode()).hexdigest()
+    """Ze względu na konieczność pokazywania kodu inwestorowi, rezygnujemy z hashowania i zapisujemy znormalizowany kod."""
+    return normalize_access_code(code)
 
 def create_crew_access_code(project_id: str, supabase_client, label: str = "Domyślna Ekipa") -> str:
     """Tworzy nowy kod dostępu dla ekipy i zapisuje hash w bazie."""
@@ -43,10 +40,16 @@ def deactivate_project_crew_codes(project_id: str, supabase_client):
     """Dezaktywuje wszystkie dotychczasowe kody dla danego projektu."""
     supabase_client.table("project_access_codes").update({"active": False}).eq("project_id", project_id).eq("role", "crew").execute()
 
+def get_active_crew_code(project_id: str, supabase_client) -> str:
+    """Pobiera aktywny kod dla ekipy, jeśli istnieje."""
+    res = supabase_client.table("project_access_codes").select("code_hash").eq("project_id", project_id).eq("role", "crew").eq("active", True).execute()
+    if res.data and len(res.data) > 0:
+        return res.data[0]["code_hash"]
+    return None
+
 def active_crew_code_exists(project_id: str, supabase_client) -> bool:
     """Sprawdza czy projekt posiada aktywny kod dla ekipy."""
-    res = supabase_client.table("project_access_codes").select("id").eq("project_id", project_id).eq("role", "crew").eq("active", True).execute()
-    return bool(res.data and len(res.data) > 0)
+    return bool(get_active_crew_code(project_id, supabase_client))
 
 def validate_crew_access_code(code: str, supabase_client) -> dict:
     """Weryfikuje wpisany kod i ewentualnie zwraca rekord z bazy, jeśli kod jest prawidłowy i aktywny."""

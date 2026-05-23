@@ -120,24 +120,19 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
     # 1.5 DOSTĘP EKIPY
     st.markdown("### 🔐 Dostęp ekipy")
     with st.container():
-        if st.session_state.get("last_generated_crew_code"):
-            st.success(f"Oto nowy kod dostępu dla ekipy: **{st.session_state['last_generated_crew_code']}**")
-            st.warning("Zapisz go i przekaż Szefowi Ekipy. Z powodów bezpieczeństwa kod ten wyświetla się w pełni jawnie tylko raz!")
-            if st.button("Ukryj kod (Zapisałem)"):
-                del st.session_state["last_generated_crew_code"]
-                st.rerun()
+        from services.access_service import get_active_crew_code
+        active_code = get_active_crew_code(selected_project_id, supabase)
+        
+        if active_code:
+            st.success(f"Aktywny kod dostępu dla ekipy: **{active_code}**")
+            st.info("Przekaż ten kod Szefowi Ekipy. Ekipa loguje się za jego pomocą do tego projektu.")
         else:
-            from services.access_service import active_crew_code_exists
-            if active_crew_code_exists(selected_project_id, supabase):
-                st.info("✅ Aktywny kod dla ekipy istnieje (został wcześniej wygenerowany).")
-            else:
-                st.warning("Brak aktywnego kodu dla ekipy.")
-                
-            if st.button("Wygeneruj nowy kod dla ekipy (nadpisze stary)"):
-                from services.access_service import create_crew_access_code
-                new_code = create_crew_access_code(selected_project_id, supabase)
-                st.session_state["last_generated_crew_code"] = new_code
-                st.rerun()
+            st.warning("Brak aktywnego kodu dla ekipy.")
+            
+        if st.button("Wygeneruj nowy kod dla ekipy (nadpisze stary)"):
+            from services.access_service import create_crew_access_code
+            create_crew_access_code(selected_project_id, supabase)
+            st.rerun()
                 
     st.markdown("---")
     # 2. DASHBOARD - METRYKI
