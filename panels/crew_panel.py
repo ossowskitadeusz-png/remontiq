@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 from services.negotiation_service import NegotiationService
 from services.phase_service import PhaseService
+from components.chat_component import send_system_chat_alert
 from supabase import create_client
 
 def render_crew_panel(supabase=None, phase_service=None, negotiation_service=None, change_service=None, task_service=None, ordering_service=None):
@@ -84,7 +85,21 @@ def render_crew_panel(supabase=None, phase_service=None, negotiation_service=Non
     # ALERT KONTROFERT - Najważniejsza powiadomienie
     if pending_crew:
         st.error(f"🚨 **UWAGA! Masz {len(pending_crew)} nową(e) kontrofertę(y) od Inwestora!** Zajrzyj do zakładki 'Kontrpropozycje', aby podjąć decyzję.", icon="🚨")
-    
+        
+    with st.expander("⚡ Szybkie akcje", expanded=False):
+        with st.form("quick_action_msg_form", clear_on_submit=True):
+            quick_msg = st.text_area("💬 Napisz do inwestora", placeholder="Wpisz treść wiadomości...", height=80)
+            if st.form_submit_button("Wyślij wiadomość", type="primary"):
+                if not quick_msg.strip():
+                    st.warning("Wiadomość nie może być pusta.")
+                else:
+                    msg_with_prefix = f"👷 Wiadomość od ekipy: {quick_msg.strip()}"
+                    success = send_system_chat_alert(supabase, selected_project_id, msg_with_prefix)
+                    if success:
+                        st.success("Wiadomość została wysłana do Inwestora!")
+                    else:
+                        st.error("Nie udało się wysłać wiadomości (brak zadań w projekcie lub błąd bazy).")
+
     # 3. TABY
     counter_tab_title = f"💬 Kontrpropozycje 🔴 ({len(pending_crew)})" if pending_crew else "💬 Kontrpropozycje"
     

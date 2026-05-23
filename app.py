@@ -11,7 +11,7 @@ import random
 import string
 import os
 
-APP_VERSION = "sprint27-v2.0-FastTrack"
+APP_VERSION = "sprint27-v2.1-stable"
 
 # ==========================================
 # 1. SUPABASE CONNECTION (Chmura)
