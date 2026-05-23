@@ -2348,6 +2348,7 @@ if st.session_state["role"] is None:
                 if st.form_submit_button("Zaloguj jako Inwestor", width="stretch", type="primary"):
                     if pin == str(inv_pin):
                         st.session_state["role"] = "investor"
+                        st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
                         st.session_state["last_visit"] = st.session_state.get("current_visit", None)
                         st.session_state["current_visit"] = datetime.now().isoformat()
                         st.rerun()
