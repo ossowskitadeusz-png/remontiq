@@ -95,7 +95,7 @@ def render_crew_dashboard(supabase, phase_service, negotiation_service, task_ser
     # ==========================================
     st.subheader("📋 Twoje zadania")
     
-    tasks_res = supabase.table("tasks").select("id, name, kanban_status, commercial_status, phase_id, final_approved_price").eq("project_id", selected_project_id).eq("commercial_status", "approved").execute()
+    tasks_res = supabase.table("tasks").select("id, name, kanban_status, commercial_status, phase_id").eq("project_id", selected_project_id).eq("commercial_status", "approved").execute()
     tasks = tasks_res.data or []
     
     phases_res = supabase.table("project_phases").select("id, phase_name").eq("project_id", selected_project_id).execute()
@@ -112,9 +112,7 @@ def render_crew_dashboard(supabase, phase_service, negotiation_service, task_ser
             
             with st.container(border=True):
                 st.markdown(f"### {t['name']}")
-                
-                price_display = f" | 💰 Cena ustalona: {float(t.get('final_approved_price', 0)):,.0f} zł" if t.get('final_approved_price') else ""
-                st.caption(f"🏠 {room} | Aktualny status: **{status}**{price_display}")
+                st.caption(f"🏠 {room} | Aktualny status: **{status}**")
                 
                 col1, col2, col3 = st.columns(3)
                 with col1:

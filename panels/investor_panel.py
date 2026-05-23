@@ -331,28 +331,6 @@ def render_investor_panel(supabase=None, phase_service=None, negotiation_service
                             st.table(pd.DataFrame(task_data))
                         else:
                             st.caption("Brak zaplanowanych zadań w tym pomieszczeniu.")
-                            
-                        with st.expander("➕ Dodaj zadanie do tego pomieszczenia"):
-                            with st.form(f"add_task_form_{phase_id}", clear_on_submit=True):
-                                new_task_name = st.text_input("Nazwa zadania / roboty *", key=f"ntn_{phase_id}")
-                                fast_track_enabled = st.checkbox("Cena już ustalona z ekipą — pomiń wycenę", key=f"fte_{phase_id}")
-                                fast_track_price = st.number_input("Zaakceptowana cena (PLN)", min_value=0.0, step=10.0, key=f"ftp_{phase_id}")
-                                if st.form_submit_button("Dodaj zadanie", type="primary"):
-                                    if not new_task_name.strip():
-                                        st.error("Podaj nazwę zadania!")
-                                    elif fast_track_enabled and fast_track_price <= 0:
-                                        st.error("Podaj prawidłową, dodatnią kwotę większą od 0.")
-                                    else:
-                                        task_service.create_task(
-                                            project_id=selected_project_id,
-                                            phase_id=phase_id,
-                                            name=new_task_name.strip(),
-                                            fast_track_enabled=fast_track_enabled,
-                                            fast_track_price=fast_track_price if fast_track_enabled else None
-                                        )
-                                        st.success("Dodano zadanie!")
-                                        st.rerun()
-
 
 
     with tab_timeline:
