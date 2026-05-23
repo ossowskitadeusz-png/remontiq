@@ -304,24 +304,77 @@ def process_task_handshake(task_id, action, actor_role, price=None, comment=""):
         st.error(f"Błąd Handshake 2.1: {e}")
         return False
 
+def enforce_project_access_invariant():
+    """Wymusza autoryzację projektu po zalogowaniu. Zapobiega zmianie projektu przez ekipę."""
+    role = st.session_state.get("role")
+    
+    if role == "crew":
+        authorized_id = st.session_state.get("crew_authorized_project_id")
+        current_id = st.session_state.get("current_project_id")
+        verified = st.session_state.get("crew_project_access_verified")
+        
+        if not verified or not authorized_id:
+            render_crew_login_gate()
+            st.stop()
+            
+        if current_id != authorized_id:
+            st.session_state["current_project_id"] = authorized_id
+            st.warning("Dostęp ekipy jest ograniczony do remontu przypisanego kodem.")
+            st.rerun()
+            
+    if role == "investor":
+        pass
+
+def set_current_project_id(project_id: str, source: str = ""):
+    """Bezpieczny setter dla current_project_id sprawdzający uprawnienia."""
+    role = st.session_state.get("role")
+    
+    if role == "crew":
+        authorized_id = st.session_state.get("crew_authorized_project_id")
+        if project_id != authorized_id:
+            st.error("Brak dostępu do tego remontu.")
+            st.stop()
+            
+    if role == "investor":
+        user_id = st.session_state.get("user_id")
+        if not user_id:
+            st.error("Brak identyfikatora inwestora.")
+            st.stop()
+            
+        # Sprawdzamy czy projekt należy do inwestora
+        res = supabase.table("project_metadata").select("id").eq("id", project_id).eq("user_id", user_id).limit(1).execute()
+        if not res.data:
+            st.error("Brak dostępu do tego remontu.")
+            st.stop()
+            
+    st.session_state["current_project_id"] = project_id
+
 def get_project_metadata():
     try:
-        query = supabase.table("project_metadata").select("*")
-        if st.session_state.get("current_project_id"):
-            query = query.eq("id", st.session_state["current_project_id"])
-        else:
-            if st.session_state.get("role") == "investor":
-                user_id = st.session_state.get("user_id", "00000000-0000-0000-0000-000000000001")
-                query = query.eq("user_id", user_id).order("created_at", desc=True).limit(1)
+        if st.session_state.get("role") == "crew":
+            # Ekipa ma zablokowany dostęp do jednego konkretnego projektu
+            auth_id = st.session_state.get("crew_authorized_project_id")
+            if not auth_id: return None
+            res = supabase.table("project_metadata").select("*").eq("id", auth_id).execute()
+            return res.data[0] if res.data else None
+            
+        elif st.session_state.get("role") == "investor":
+            query = supabase.table("project_metadata").select("*")
+            user_id = st.session_state.get("user_id", "00000000-0000-0000-0000-000000000001")
+            
+            if st.session_state.get("current_project_id"):
+                query = query.eq("id", st.session_state["current_project_id"]).eq("user_id", user_id)
             else:
-                return None
+                query = query.eq("user_id", user_id).order("created_at", desc=True).limit(1)
+                
+            res = query.execute()
             
-        res = query.execute()
-        
-        if res.data and not st.session_state.get("current_project_id"):
-            st.session_state["current_project_id"] = res.data[0]["id"]
-            
-        return res.data[0] if res.data else None
+            if res.data and not st.session_state.get("current_project_id"):
+                set_current_project_id(res.data[0]["id"], "get_project_metadata_fallback")
+                
+            return res.data[0] if res.data else None
+        else:
+            return None
     except Exception as e:
         st.error(f"❌ Błąd pobierania metadanych: {e}")
         return None
@@ -2281,8 +2334,11 @@ if "role" not in st.session_state:
 def logout():
     st.session_state["role"] = None
     st.session_state["current_project_id"] = None
+    st.session_state.pop("selected_project_id", None)
+    st.session_state["crew_authorized_project_id"] = None
     st.session_state["crew_project_access_verified"] = False
     st.session_state["crew_access_code_id"] = None
+    st.session_state.pop("last_generated_crew_code", None)
     st.rerun()
 
 # --- EKRAN LOGOWANIA ---
@@ -2306,6 +2362,11 @@ if st.session_state["role"] is None:
                 pin = st.text_input("Główny PIN Inwestora", type="password", placeholder="Wpisz PIN inwestora", key="investor_pin_input")
                 if st.form_submit_button("Zaloguj jako Inwestor", width="stretch", type="primary"):
                     if pin == str(inv_pin):
+                        # Zmiana z ekipy na inwestora (czyszczenie ekipy)
+                        st.session_state["crew_authorized_project_id"] = None
+                        st.session_state["crew_project_access_verified"] = False
+                        st.session_state["crew_access_code_id"] = None
+                        
                         st.session_state["role"] = "investor"
                         st.session_state["user_id"] = "00000000-0000-0000-0000-000000000001"
                         st.session_state["last_visit"] = st.session_state.get("current_visit", None)
@@ -2330,7 +2391,11 @@ if st.session_state["role"] is None:
                         supabase_client.table("project_access_codes").update({"used_at": datetime.now().isoformat()}).eq("id", record["id"]).execute()
                         
                         st.session_state["role"] = "crew"
+                        # Zmiana z inwestora na ekipę (czyszczenie inwestora)
+                        st.session_state.pop("selected_project_id", None)
+                        
                         st.session_state["current_project_id"] = record["project_id"]
+                        st.session_state["crew_authorized_project_id"] = record["project_id"]
                         st.session_state["crew_project_access_verified"] = True
                         st.session_state["crew_access_code_id"] = record["id"]
                         
@@ -2377,6 +2442,9 @@ def render_activity_banner(role):
 # 🚀 SYSTEM NAWIGACJI SaaS (Multi-Role)
 # ==========================================
 
+# 0. Wymuś autoryzację i blokadę dostępu zanim cokolwiek się załaduje!
+enforce_project_access_invariant()
+
 # 1. Pobranie metadanych projektu (Wspólne)
 project_meta = get_project_metadata()
 if project_meta:
@@ -2403,8 +2471,11 @@ def render_crew_login_gate():
             record = validate_crew_access_code(crew_code, supabase_client)
             if record:
                 supabase_client.table("project_access_codes").update({"used_at": datetime.now().isoformat()}).eq("id", record["id"]).execute()
+                
+                st.session_state.pop("selected_project_id", None)
                 st.session_state["role"] = "crew"
                 st.session_state["current_project_id"] = record["project_id"]
+                st.session_state["crew_authorized_project_id"] = record["project_id"]
                 st.session_state["crew_project_access_verified"] = True
                 st.session_state["crew_access_code_id"] = record["id"]
                 st.session_state["last_visit"] = st.session_state.get("current_visit", None)
@@ -3139,7 +3210,13 @@ render_activity_banner("investor")
 
 # Pomocnicza lista pokoi (Dla formularzy)
 p_meta_global = get_project_metadata()
-p_id_global = p_meta_global.get('id') if p_meta_global else None
+if st.session_state.get("role") == "crew":
+    p_id_global = st.session_state.get("crew_authorized_project_id")
+    if p_id_global != st.session_state.get("current_project_id"):
+        st.error("Błąd spójności dostępu. Wyloguj się.")
+        st.stop()
+else:
+    p_id_global = p_meta_global.get('id') if p_meta_global else None
 
 if p_id_global:
     rooms_req = supabase.table("rooms").select("id, name").eq("project_id", p_id_global).execute()
